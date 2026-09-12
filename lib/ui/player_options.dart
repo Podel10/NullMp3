@@ -219,9 +219,22 @@ class PlayerOptionsSheet extends StatelessWidget {
   Future<void> _open(BuildContext sheetContext, Widget page, {bool playTrack = false}) async {
     if (playTrack) {
       final player = contextPlayer(host, listen: false);
+      final library = contextLibrary(host, listen: false);
       if (player.current?.path != track.path) {
-        await player.playTracks([track]);
+        final queued = player.queue.indexWhere((item) => item.path == track.path);
+        if (queued >= 0) {
+          await player.playAt(queued);
+        } else {
+          final songs = library.songs;
+          final start = songs.indexWhere((item) => item.path == track.path);
+          if (start >= 0) {
+            await player.playTracks(songs, start: start);
+          } else {
+            await player.playTracks([track]);
+          }
+        }
       }
+      player.ensureBrowsableQueue();
     }
     if (!sheetContext.mounted) return;
     Navigator.pop(sheetContext);

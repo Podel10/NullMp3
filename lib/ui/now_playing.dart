@@ -85,7 +85,7 @@ class NowPlayingScreen extends StatelessWidget {
               ),
               Expanded(
                 child: Padding(
-                  padding: const EdgeInsets.fromLTRB(20, 4, 20, 0),
+                  padding: const EdgeInsets.fromLTRB(24, 8, 24, 8),
                   child: LayoutBuilder(
                     builder: (context, constraints) {
                       final side = constraints.biggest.shortestSide;
@@ -107,7 +107,7 @@ class NowPlayingScreen extends StatelessWidget {
                 ),
               ),
               Padding(
-                padding: const EdgeInsets.fromLTRB(8, 10, 8, 0),
+                padding: const EdgeInsets.fromLTRB(8, 4, 8, 0),
                 child: Row(
                   children: [
                     IconButton(
@@ -145,7 +145,7 @@ class NowPlayingScreen extends StatelessWidget {
               ),
               _NowSeekBar(active: onAmbient, inactive: onAmbient.withValues(alpha: 0.22)),
               Padding(
-                padding: const EdgeInsets.fromLTRB(12, 18, 12, 22),
+                padding: const EdgeInsets.fromLTRB(12, 10, 12, 8),
                 child: Row(
                   mainAxisAlignment: MainAxisAlignment.spaceEvenly,
                   children: [
@@ -189,6 +189,7 @@ class NowPlayingScreen extends StatelessWidget {
                   ],
                 ),
               ),
+              const SizedBox(height: 52),
             ],
           ),
         ),

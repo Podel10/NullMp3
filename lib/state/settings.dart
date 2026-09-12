@@ -124,8 +124,8 @@ class SettingsController extends ChangeNotifier {
       await _prefs.setBool(_kTelegramMusicMigrated, true);
     }
     volume = _prefs.getDouble(_kVolume) ?? 1;
-    speed = _prefs.getDouble(_kSpeed) ?? 1;
-    pitch = _prefs.getDouble(_kPitch) ?? 1;
+    speed = (_prefs.getDouble(_kSpeed) ?? 1).clamp(0.5, 1.5);
+    pitch = (_prefs.getDouble(_kPitch) ?? 1).clamp(0.5, 1.5);
     pauseFade = _prefs.getBool(_kPauseFade) ?? false;
     crossfade = _prefs.getBool(_kCrossfade) ?? false;
     continuous = _prefs.getBool(_kContinuous) ?? true;
@@ -233,13 +233,13 @@ class SettingsController extends ChangeNotifier {
   }
 
   Future<void> setSpeed(double value, {bool persist = true}) async {
-    speed = value.clamp(0.5, 2.0);
+    speed = value.clamp(0.5, 1.5);
     if (persist) await _prefs.setDouble(_kSpeed, speed);
     notifyListeners();
   }
 
   Future<void> setPitch(double value, {bool persist = true}) async {
-    pitch = value.clamp(0.5, 2.0);
+    pitch = value.clamp(0.5, 1.5);
     if (persist) await _prefs.setDouble(_kPitch, pitch);
     notifyListeners();
   }

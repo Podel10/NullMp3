@@ -6,7 +6,7 @@ import '../state/player.dart';
 import '../state/settings.dart';
 
 const _kMinRate = 0.5;
-const _kMaxRate = 2.0;
+const _kMaxRate = 1.5;
 const _kRateStep = 0.05;
 
 void showSpeedPitchSheet(BuildContext context) {
@@ -59,7 +59,7 @@ class _SpeedPitchSheetState extends State<SpeedPitchSheet> {
 
   @override
   Widget build(BuildContext context) {
-    const divisions = 30;
+    const divisions = 20;
     final s = context.s;
     return SafeArea(
       top: false,
@@ -175,7 +175,7 @@ class _RateControl extends StatelessWidget {
           ),
         ),
         Padding(
-          padding: const EdgeInsets.symmetric(horizontal: 6),
+          padding: const EdgeInsets.symmetric(horizontal: 24),
           child: Row(
             children: [
               Text(context.s.slow, style: const TextStyle(color: Colors.white38, fontSize: 12)),

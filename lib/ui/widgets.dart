@@ -79,7 +79,7 @@ class _CoverArtState extends State<CoverArt> {
   @override
   Widget build(BuildContext context) {
     final seed = widget.track?.albumKey ?? widget.track?.title ?? '?';
-    final iconSize = widget.expand ? 64.0 : widget.size * 0.42;
+    final iconSize = widget.expand ? 80.0 : widget.size * 0.42;
     final child = ClipRRect(
       borderRadius: BorderRadius.circular(widget.radius),
       child: SizedBox(
@@ -116,7 +116,7 @@ class _Placeholder extends StatelessWidget {
     if (muted) {
       return ColoredBox(
         color: const Color(0xFF3A4A56),
-        child: Icon(Icons.music_note, color: Colors.white54, size: iconSize * 1.15),
+        child: Icon(Icons.music_note, color: Colors.white54, size: iconSize),
       );
     }
     final color = colorFor(seed);
