@@ -145,6 +145,7 @@ class AppTheme {
         unselectedLabelColor: scheme.onSurface.withValues(alpha: 0.55),
         indicatorSize: TabBarIndicatorSize.label,
         dividerColor: Colors.transparent,
+        tabAlignment: TabAlignment.start,
         labelStyle: textTheme.titleSmall?.copyWith(fontWeight: FontWeight.w700),
         unselectedLabelStyle: textTheme.titleSmall?.copyWith(fontWeight: FontWeight.w500),
       ),

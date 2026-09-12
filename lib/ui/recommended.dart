@@ -19,9 +19,11 @@ class RecommendedTab extends StatelessWidget {
     final library = context.watch<LibraryController>();
     final s = context.s;
     final recentlyPlayed = library.recentlyPlayedTracks.take(16).toList();
-    final popular = _uniqueAlbums(
-      library.mostPlayedTracks.isNotEmpty ? library.mostPlayedTracks : library.recentlyAddedTracks,
-    );
+    final popular = (library.mostPlayedTracks.isNotEmpty
+            ? library.mostPlayedTracks
+            : library.recentlyAddedTracks)
+        .take(16)
+        .toList();
     final favorites = library.favoriteTracks.take(16).toList();
     final added = library.recentlyAddedTracks.take(10).toList();
 
@@ -42,18 +44,19 @@ class RecommendedTab extends StatelessWidget {
           _CarouselSection(
             title: s.mostPopular,
             tracks: popular,
-            preferAlbum: true,
+            showAlbum: true,
             onSeeAll: () => _openAll(
               context,
               s.mostPopular,
               library.mostPlayedTracks.isNotEmpty ? library.mostPlayedTracks : library.recentlyAddedTracks,
+              showPlayCounts: true,
             ),
           ),
         if (favorites.isNotEmpty)
           _CarouselSection(
             title: s.favorites,
             tracks: favorites,
-            preferAlbum: true,
+            showAlbum: true,
             onSeeAll: () => _openAll(context, s.favorites, library.favoriteTracks),
           ),
         if (added.isNotEmpty) ...[
@@ -68,21 +71,12 @@ class RecommendedTab extends StatelessWidget {
     );
   }
 
-  List<Track> _uniqueAlbums(List<Track> tracks) {
-    final seen = <String>{};
-    final out = <Track>[];
-    for (final track in tracks) {
-      if (!seen.add(track.albumKey)) continue;
-      out.add(track);
-      if (out.length >= 12) break;
-    }
-    return out;
-  }
-
-  void _openAll(BuildContext context, String title, List<Track> tracks) {
+  void _openAll(BuildContext context, String title, List<Track> tracks, {bool showPlayCounts = false}) {
     Navigator.push(
       context,
-      MaterialPageRoute<void>(builder: (_) => SmartPlaylistScreen(title: title, tracks: tracks)),
+      MaterialPageRoute<void>(
+        builder: (_) => SmartPlaylistScreen(title: title, tracks: tracks, showPlayCounts: showPlayCounts),
+      ),
     );
   }
 }
@@ -125,13 +119,13 @@ class _CarouselSection extends StatelessWidget {
     required this.title,
     required this.tracks,
     required this.onSeeAll,
-    this.preferAlbum = false,
+    this.showAlbum = false,
   });
 
   final String title;
   final List<Track> tracks;
   final VoidCallback onSeeAll;
-  final bool preferAlbum;
+  final bool showAlbum;
 
   @override
   Widget build(BuildContext context) {
@@ -149,9 +143,9 @@ class _CarouselSection extends StatelessWidget {
             separatorBuilder: (_, _) => const SizedBox(width: 12),
             itemBuilder: (context, i) {
               final track = tracks[i];
-              final heading = preferAlbum && track.album != 'Unknown album' ? track.album : track.title;
-              final subtitle = track.artist == 'Unknown artist' && heading != track.title
-                  ? track.title
+              final hasAlbum = track.album.isNotEmpty && track.album != 'Unknown album';
+              final subtitle = showAlbum
+                  ? (hasAlbum ? s.displayAlbum(track.album) : '')
                   : s.displayArtist(track.artist);
               return SizedBox(
                 width: 124,
@@ -167,19 +161,20 @@ class _CarouselSection extends StatelessWidget {
                       CoverArt(track: track, size: 124, radius: 10, loadArtwork: true),
                       const SizedBox(height: 8),
                       Text(
-                        heading == track.album ? s.displayAlbum(track.album) : heading,
+                        track.title,
                         maxLines: 1,
                         overflow: TextOverflow.ellipsis,
                         style: const TextStyle(fontWeight: FontWeight.w700, fontSize: 13),
                       ),
-                      Text(
-                        subtitle,
-                        maxLines: 1,
-                        overflow: TextOverflow.ellipsis,
-                        style: Theme.of(context).textTheme.bodySmall?.copyWith(
-                              color: Theme.of(context).colorScheme.onSurface.withValues(alpha: 0.55),
-                            ),
-                      ),
+                      if (subtitle.isNotEmpty)
+                        Text(
+                          subtitle,
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                          style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                                color: Theme.of(context).colorScheme.onSurface.withValues(alpha: 0.55),
+                              ),
+                        ),
                     ],
                   ),
                 ),

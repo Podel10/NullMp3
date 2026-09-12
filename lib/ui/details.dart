@@ -181,21 +181,29 @@ class PlaylistDetailScreen extends StatelessWidget {
 }
 
 class SmartPlaylistScreen extends StatelessWidget {
-  const SmartPlaylistScreen({super.key, required this.title, required this.tracks});
+  const SmartPlaylistScreen({
+    super.key,
+    required this.title,
+    required this.tracks,
+    this.showPlayCounts = false,
+  });
   final String title;
   final List<Track> tracks;
+  final bool showPlayCounts;
 
   @override
   Widget build(BuildContext context) {
     final player = context.watch<PlayerController>();
+    final library = context.watch<LibraryController>();
+    final s = context.s;
     return Scaffold(
       appBar: AppBar(title: Text(title)),
       body: tracks.isEmpty
-          ? Center(child: Text(context.s.nothingHereYet))
+          ? Center(child: Text(s.nothingHereYet))
           : Column(
               children: [
                 PlayHeader(
-                  countLabel: context.s.songsCount(tracks.length),
+                  countLabel: s.songsCount(tracks.length),
                   onPlay: () => player.playTracks(tracks),
                   onShuffle: () async {
                     await player.playTracks(tracks);
@@ -207,9 +215,11 @@ class SmartPlaylistScreen extends StatelessWidget {
                     itemCount: tracks.length,
                     itemBuilder: (context, i) {
                       final track = tracks[i];
+                      final plays = library.playCounts[track.path] ?? 0;
                       return SongTile(
                         track: track,
                         selected: player.current?.path == track.path,
+                        detail: showPlayCounts ? s.listens(plays) : null,
                         onTap: () => player.playTracks(tracks, start: i),
                       );
                     },

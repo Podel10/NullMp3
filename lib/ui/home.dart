@@ -108,6 +108,8 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
         bottom: TabBar(
                 controller: _tabs,
                 isScrollable: true,
+                tabAlignment: TabAlignment.start,
+                padding: EdgeInsets.zero,
                 tabs: [
                   Tab(text: s.tabRecommended),
                   Tab(text: s.tabSongs),

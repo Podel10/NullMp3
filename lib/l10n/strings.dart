@@ -65,6 +65,7 @@ class S {
   String get favorites => _t('Favorites', 'Избранное', '收藏');
   String get recentlyAdded => _t('Recently added', 'Последние добавленные', '最近添加');
   String get mostPlayed => _t('Most played', 'Часто играемые', '常听');
+  String listens(int n) => '🎧 $n';
   String get seeAll => _t('SEE ALL', 'ПОСМОТРЕТЬ ВСЕ', '查看全部');
   String get playToFill => _t('Play something to fill this page', 'Включите трек, чтобы заполнить эту страницу', '播放歌曲后这里会出现内容');
 

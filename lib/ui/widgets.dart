@@ -557,6 +557,7 @@ class SongTile extends StatelessWidget {
     this.trailing,
     this.selected = false,
     this.openPlayer = true,
+    this.detail,
   });
 
   final Track track;
@@ -565,6 +566,7 @@ class SongTile extends StatelessWidget {
   final Widget? trailing;
   final bool selected;
   final bool openPlayer;
+  final String? detail;
 
   @override
   Widget build(BuildContext context) {
@@ -595,7 +597,9 @@ class SongTile extends StatelessWidget {
         ),
       ),
       subtitle: Text(
-        '${context.s.displayArtist(track.artist)} • ${formatDuration(track.duration)}',
+        detail == null
+            ? '${context.s.displayArtist(track.artist)} • ${formatDuration(track.duration)}'
+            : '$detail • ${context.s.displayArtist(track.artist)} • ${formatDuration(track.duration)}',
         maxLines: 1,
         overflow: TextOverflow.ellipsis,
         style: theme.textTheme.bodySmall?.copyWith(
@@ -634,22 +638,51 @@ class PlayHeader extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
+    final compactFill = FilledButton.styleFrom(
+      visualDensity: VisualDensity.compact,
+      padding: const EdgeInsets.symmetric(horizontal: 12),
+      tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+    );
+    final compactOut = OutlinedButton.styleFrom(
+      visualDensity: VisualDensity.compact,
+      padding: const EdgeInsets.symmetric(horizontal: 12),
+      tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+    );
     return Padding(
       padding: const EdgeInsets.fromLTRB(16, 8, 16, 4),
-      child: Row(
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          FilledButton.icon(
-            onPressed: onPlay,
-            icon: const Icon(Icons.play_arrow_rounded),
-            label: Text(context.s.playAll),
+          Row(
+            children: [
+              Flexible(
+                child: FittedBox(
+                  fit: BoxFit.scaleDown,
+                  alignment: Alignment.centerLeft,
+                  child: FilledButton.icon(
+                    onPressed: onPlay,
+                    style: compactFill,
+                    icon: const Icon(Icons.play_arrow_rounded, size: 20),
+                    label: Text(context.s.playAll),
+                  ),
+                ),
+              ),
+              const SizedBox(width: 8),
+              Flexible(
+                child: FittedBox(
+                  fit: BoxFit.scaleDown,
+                  alignment: Alignment.centerLeft,
+                  child: OutlinedButton.icon(
+                    onPressed: onShuffle,
+                    style: compactOut,
+                    icon: const Icon(Icons.shuffle_rounded, size: 20),
+                    label: Text(context.s.shuffle),
+                  ),
+                ),
+              ),
+            ],
           ),
-          const SizedBox(width: 8),
-          OutlinedButton.icon(
-            onPressed: onShuffle,
-            icon: const Icon(Icons.shuffle_rounded),
-            label: Text(context.s.shuffle),
-          ),
-          const Spacer(),
+          const SizedBox(height: 6),
           Text(
             countLabel,
             style: theme.textTheme.bodySmall?.copyWith(
