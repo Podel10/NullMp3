@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 
 import '../data/artwork.dart';
+import '../data/playback_file.dart';
 import '../l10n/strings.dart';
 import '../models/models.dart';
 import '../state/library.dart';
@@ -52,6 +53,7 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
       await settings.load();
       await library.load();
       await ArtworkStore.instance.init();
+      await PlaybackCache.init();
       await player.init();
       await player.restoreSession();
     } catch (error, stack) {

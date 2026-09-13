@@ -97,8 +97,8 @@ class PlayerOptionsSheet extends StatelessWidget {
                   },
                 ),
                 _GridAction(
-                  icon: Icons.edit_outlined,
-                  label: s.tagEditor,
+                  icon: Icons.display_settings_outlined,
+                  label: s.displaySettings,
                   onTap: () async {
                     Navigator.pop(context);
                     if (!host.mounted) return;

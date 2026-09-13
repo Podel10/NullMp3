@@ -43,6 +43,7 @@ class LibraryController extends ChangeNotifier {
   List<Artist>? _artistsCache;
   Map<String, List<Track>>? _foldersCache;
   Timer? _markPlayedNotify;
+  Timer? _saveCacheTimer;
 
   List<Track> get allTracks => _allTracks;
   set allTracks(List<Track> value) {
@@ -93,10 +94,17 @@ class LibraryController extends ChangeNotifier {
   Future<void> _saveCache() async {
     try {
       final payload = [for (final track in allTracks) track.toJson()];
-      final encoded = await compute(_encodeJson, payload);
+      final encoded = jsonEncode(payload);
       final file = await _cacheFile();
       await file.writeAsString(encoded);
     } catch (_) {}
+  }
+
+  void _scheduleSaveCache() {
+    _saveCacheTimer?.cancel();
+    _saveCacheTimer = Timer(const Duration(milliseconds: 700), () {
+      unawaited(_saveCache());
+    });
   }
 
   Future<File> _cacheFile() async {
@@ -260,7 +268,7 @@ class LibraryController extends ChangeNotifier {
         scanning = false;
         scanMessage = null;
         notifyListeners();
-        unawaited(_saveCache());
+        _scheduleSaveCache();
         return;
       }
       final media = await queryDeviceAudio(folders: roots);
@@ -293,9 +301,10 @@ class LibraryController extends ChangeNotifier {
               (pathLooksLikeTelegram(path) && mediaTrack.title == mediaTrack.fileName);
           if (hashed && (old == null || titleNeedsTagRead(old.title))) {
             toParse.add(path);
-            merged.add(old ?? mediaTrack);
+            merged.add(_keepUserTags(old ?? mediaTrack, old));
           } else {
-            merged.add((old != null && !titleNeedsTagRead(old.title)) ? old : mediaTrack);
+            final next = (old != null && (!titleNeedsTagRead(old.title) || old.tagsEdited)) ? old : mediaTrack;
+            merged.add(_keepUserTags(next, old));
           }
           continue;
         }
@@ -333,13 +342,14 @@ class LibraryController extends ChangeNotifier {
           final parsed = await compute(parseAudioFiles, slice);
           final byPath = {for (final track in parsed) track.path: track};
           allTracks = [
-            for (final track in allTracks) byPath[track.path] ?? track,
+            for (final track in allTracks)
+              _keepUserTags(byPath[track.path] ?? track, track),
           ];
         }
         notifyListeners();
       }
 
-      unawaited(_saveCache());
+      _scheduleSaveCache();
     } finally {
       scanning = false;
       scanMessage = null;
@@ -355,7 +365,7 @@ class LibraryController extends ChangeNotifier {
     final parsed = await compute(parseAudioFiles, fresh);
     allTracks = [...allTracks, ...parsed];
     notifyListeners();
-    unawaited(_saveCache());
+    _scheduleSaveCache();
   }
 
   Future<void> toggleFavorite(String path) async {
@@ -431,14 +441,35 @@ class LibraryController extends ChangeNotifier {
     await _savePlaylists();
   }
 
-  void replaceTrack(Track updated, {String? fromPath}) {
+  Track _keepUserTags(Track next, Track? previous) {
+    if (previous == null) return next;
+    if (!previous.tagsEdited) {
+      return _keepCoverShape(next, previous);
+    }
+    return next.copyWith(
+      title: previous.title,
+      artist: previous.artist,
+      album: previous.album,
+      albumArtist: previous.albumArtist,
+      composer: previous.composer,
+      coverShape: previous.coverShape,
+      tagsEdited: true,
+    );
+  }
+
+  Track _keepCoverShape(Track next, Track? previous) {
+    if (previous == null || next.coverShape == previous.coverShape) return next;
+    return next.copyWith(coverShape: previous.coverShape);
+  }
+
+  Future<void> replaceTrack(Track updated, {String? fromPath}) async {
     final oldPath = fromPath ?? updated.path;
     allTracks = [
       for (final track in allTracks)
         if (track.path == oldPath) updated else track,
     ];
     notifyListeners();
-    unawaited(_saveCache());
+    await _saveCache();
   }
 
   Future<void> retargetTrack(String oldPath, Track updated) async {
@@ -477,7 +508,7 @@ class LibraryController extends ChangeNotifier {
     ];
     await _savePlaylists();
     notifyListeners();
-    unawaited(_saveCache());
+    _scheduleSaveCache();
   }
 
   Future<void> hideTrack(String path) async {
@@ -515,7 +546,7 @@ class LibraryController extends ChangeNotifier {
     await _savePlaylists();
     await _saveHidden();
     notifyListeners();
-    unawaited(_saveCache());
+    _scheduleSaveCache();
   }
 
   Future<String?> deleteFromDevice(Track track) async {
@@ -546,8 +577,6 @@ List<Track> _parseTrackCache(String raw) {
       if (item is Map) Track.fromJson(Map<String, dynamic>.from(item)),
   ];
 }
-
-String _encodeJson(Object payload) => jsonEncode(payload);
 
 String _foldSearch(String input) {
   return input

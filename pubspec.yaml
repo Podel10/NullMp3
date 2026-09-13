@@ -51,6 +51,7 @@ dependencies:
   path: ^1.9.1
   share_plus: ^13.3.0
   wakelock_plus: ^1.8.0
+  video_player: ^2.10.1
 
 dev_dependencies:
   flutter_test:

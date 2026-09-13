@@ -51,7 +51,7 @@ class _LockPlayerScreenState extends State<LockPlayerScreen> {
                 const Spacer(),
                 AspectRatio(
                   aspectRatio: 1,
-                  child: CoverArt(track: track, expand: true, radius: 8, muted: true),
+                  child: CoverArt(track: track, expand: true, radius: 8, muted: true, loadArtwork: true, animate: true),
                 ),
                 const SizedBox(height: 28),
                 MarqueeText(

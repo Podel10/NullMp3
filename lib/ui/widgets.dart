@@ -5,11 +5,13 @@ import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 
 import '../data/artwork.dart';
+import '../data/cover_image.dart';
 import '../l10n/strings.dart';
 import '../models/models.dart';
 import '../state/library.dart';
 import '../state/player.dart';
 import '../theme/app_theme.dart';
+import 'cover_media.dart';
 import 'now_playing.dart';
 import 'player_options.dart';
 
@@ -29,6 +31,7 @@ class CoverArt extends StatefulWidget {
     this.expand = false,
     this.muted = false,
     this.loadArtwork,
+    this.animate = false,
   });
 
   final Track? track;
@@ -38,6 +41,7 @@ class CoverArt extends StatefulWidget {
   final bool expand;
   final bool muted;
   final bool? loadArtwork;
+  final bool animate;
 
   @override
   State<CoverArt> createState() => _CoverArtState();
@@ -50,7 +54,21 @@ class _CoverArtState extends State<CoverArt> {
   @override
   void initState() {
     super.initState();
+    ArtworkStore.instance.addListener(_onArtwork);
     _generation = ArtworkStore.instance.generationOf(widget.track?.path ?? '');
+    if (_shouldLoadArtwork) _load();
+  }
+
+  @override
+  void dispose() {
+    ArtworkStore.instance.removeListener(_onArtwork);
+    super.dispose();
+  }
+
+  void _onArtwork() {
+    final gen = ArtworkStore.instance.generationOf(widget.track?.path ?? '');
+    if (gen == _generation) return;
+    _generation = gen;
     if (_shouldLoadArtwork) _load();
   }
 
@@ -73,34 +91,46 @@ class _CoverArtState extends State<CoverArt> {
     final bytes = await ArtworkStore.instance.get(path);
     if (!mounted) return;
     if (widget.track?.path != path) return;
-    setState(() => _bytes = bytes);
+    setState(() {
+      _bytes = bytes;
+    });
   }
 
   @override
   Widget build(BuildContext context) {
     final seed = widget.track?.albumKey ?? widget.track?.title ?? '?';
     final iconSize = widget.expand ? 80.0 : widget.size * 0.42;
-    final child = ClipRRect(
-      borderRadius: BorderRadius.circular(widget.radius),
-      child: SizedBox(
-        width: widget.expand ? double.infinity : widget.size,
-        height: widget.expand ? double.infinity : widget.size,
-        child: _bytes == null
-            ? _Placeholder(seed: seed, iconSize: iconSize, muted: widget.muted)
-            : Image.memory(
-                _bytes!,
-                fit: BoxFit.cover,
-                gaplessPlayback: true,
-                filterQuality: widget.expand ? FilterQuality.medium : FilterQuality.low,
-                cacheWidth: ((widget.expand ? 420 : widget.size) *
-                        (MediaQuery.maybeDevicePixelRatioOf(context) ?? 2))
-                    .round()
-                    .clamp(48, 720),
-                errorBuilder: (_, _, _) => _Placeholder(seed: seed, iconSize: iconSize, muted: widget.muted),
-              ),
-      ),
+    final circle = widget.track?.isCircleCover ?? false;
+    final playing = widget.animate && contextPlayer(context).playing;
+    Widget child = SizedBox(
+      width: widget.expand ? double.infinity : widget.size,
+      height: widget.expand ? double.infinity : widget.size,
+      child: _bytes == null
+          ? _Placeholder(seed: seed, iconSize: iconSize, muted: widget.muted)
+          : CoverBytesView(
+              bytes: _bytes!,
+              fit: BoxFit.cover,
+              animate: widget.animate,
+              playing: playing,
+              filterQuality: widget.expand ? FilterQuality.medium : FilterQuality.low,
+              cacheWidth: ((widget.expand ? 420 : widget.size) *
+                      (MediaQuery.maybeDevicePixelRatioOf(context) ?? 2))
+                  .round()
+                  .clamp(48, 720),
+              errorBuilder: (_, _, _) => _Placeholder(seed: seed, iconSize: iconSize, muted: widget.muted),
+            ),
     );
-    if (widget.heroTag == null) return child;
+    child = circle
+        ? ClipOval(child: child)
+        : ClipRRect(
+            borderRadius: BorderRadius.circular(widget.radius),
+            child: child,
+          );
+    if (widget.expand && circle) {
+      child = Center(child: AspectRatio(aspectRatio: 1, child: child));
+    }
+    final animated = _bytes != null && isAnimatedCover(_bytes!);
+    if (widget.heroTag == null || animated) return child;
     return Hero(tag: widget.heroTag!, child: child);
   }
 }
@@ -576,7 +606,7 @@ class SongTile extends StatelessWidget {
       dense: true,
       visualDensity: const VisualDensity(horizontal: 0, vertical: -2),
       contentPadding: const EdgeInsets.fromLTRB(12, 2, 4, 2),
-      minLeadingWidth: 40,
+      minLeadingWidth: 48,
       horizontalTitleGap: 12,
       onTap: () {
         unawaited(onTap());
@@ -585,7 +615,7 @@ class SongTile extends StatelessWidget {
         }
       },
       onLongPress: () => showSongMenu(context, track, playlist: playlist),
-      leading: CoverArt(track: track, size: 40, radius: 8, muted: true),
+      leading: CoverArt(track: track, size: 48, radius: 8, muted: true, loadArtwork: true),
       title: Text(
         track.title,
         maxLines: 1,

@@ -183,7 +183,11 @@ class S {
   String get lyricsNotFound => _t('Lyrics not found', 'Текст не найден', '未找到歌词');
   String get addToPlaylist => _t('Add to playlist', 'Добавить в плейлист', '添加到播放列表');
   String get addToPlaylistEllipsis => _t('Add to playlist…', 'Добавить в плейлист…', '添加到播放列表…');
-  String get tagEditor => _t('Tag editor', 'Редактор тегов', '标签编辑');
+  String get tagEditor => _t('Display settings', 'Настройка отображения', '显示设置');
+  String get displaySettings => _t('Display settings', 'Настройка отображения', '显示设置');
+  String get coverShape => _t('Cover shape', 'Форма обложки', '封面形状');
+  String get shapeSquare => _t('Square', 'Квадрат', '方形');
+  String get shapeCircle => _t('Circle', 'Круг', '圆形');
   String get details => _t('Details', 'Подробнее', '详情');
   String get playbackSpeed => _t('Playback speed', 'Скорость воспроизведения', '播放速度');
   String get ringtoneEditor => _t('Ringtone editor', 'Редактор рингтонов', '铃声编辑');
@@ -233,7 +237,14 @@ class S {
   }
 
   String get cover => _t('Cover', 'Обложка', '封面');
-  String saveTagsFailed(String error) => _t('Could not save tags: $error', 'Не удалось сохранить теги: $error', '无法保存标签：$error');
+  String get changeCover => _t('Change cover', 'Сменить обложку', '更换封面');
+  String get changeCoverHint => _t('Photo, GIF or video', 'Фото, GIF или видео', '图片、GIF 或视频');
+  String get pickCoverFailed => _t(
+        'Could not load that image or GIF.',
+        'Не удалось загрузить изображение или GIF.',
+        '无法加载该图片或 GIF。',
+      );
+  String saveTagsFailed(String error) => _t('Could not save: $error', 'Не удалось сохранить: $error', '无法保存：$error');
   String get tagsSaved => _t('Tags saved', 'Теги сохранены', '标签已保存');
   String get tagsSavedRenamed => _t('Tags saved, file renamed', 'Теги сохранены, файл переименован', '标签已保存，文件已重命名');
   String get fieldTitle => _t('Title', 'Заголовок', '标题');

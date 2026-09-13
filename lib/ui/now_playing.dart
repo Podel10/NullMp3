@@ -6,6 +6,7 @@ import 'package:flutter/services.dart';
 import 'package:provider/provider.dart';
 
 import '../data/artwork.dart';
+import '../data/cover_image.dart';
 import '../l10n/strings.dart';
 import '../models/models.dart';
 import '../state/settings.dart';
@@ -98,6 +99,8 @@ class NowPlayingScreen extends StatelessWidget {
                             radius: 10,
                             expand: true,
                             muted: true,
+                            loadArtwork: true,
+                            animate: true,
                             heroTag: 'now-art',
                           ),
                         ),
@@ -225,7 +228,7 @@ class _ArtworkAtmosphere extends StatelessWidget {
           fit: StackFit.expand,
           children: [
             ColoredBox(color: tint),
-            if (bytes != null && bytes.isNotEmpty)
+            if (bytes != null && bytes.isNotEmpty && !isVideoBytes(bytes))
               Opacity(
                 opacity: 0.42,
                 child: ImageFiltered(

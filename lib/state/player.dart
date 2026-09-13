@@ -2,12 +2,17 @@ import 'dart:async';
 import 'dart:convert';
 import 'dart:math' as math;
 
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:just_audio/just_audio.dart';
 import 'package:palette_generator/palette_generator.dart';
+import 'package:permission_handler/permission_handler.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 import '../data/artwork.dart';
+import '../data/cover_image.dart';
+import '../data/playback_file.dart';
 import '../models/models.dart';
 import 'library.dart';
 import 'settings.dart';
@@ -17,16 +22,17 @@ class PlayerController extends ChangeNotifier {
     player.playingStream.listen((value) {
       playing = value;
       notifyListeners();
+      _pushSession();
     });
 
     player.processingStateStream.listen((state) {
-      if (state == ProcessingState.completed && !_loading && !_handlingComplete) {
+      if (state == ProcessingState.completed && !_loading && _fileEdit == null && !_handlingComplete) {
         unawaited(_onCompleted());
       }
     });
 
     player.errorStream.listen((_) {
-      if (_loading || _errorSkips >= 8) return;
+      if (_loading || _fileEdit != null || _errorSkips >= 8) return;
       _errorSkips++;
       unawaited(next());
     });
@@ -36,7 +42,12 @@ class PlayerController extends ChangeNotifier {
   final SettingsController settings;
 
   // Created synchronously so the UI can bind streams immediately.
-  final AudioPlayer player = AudioPlayer(maxSkipsOnError: 8);
+  final AudioPlayer player = AudioPlayer(
+    maxSkipsOnError: 8,
+    androidAudioOffloadPreferences: const AndroidAudioOffloadPreferences(
+      audioOffloadMode: AndroidAudioOffloadMode.disabled,
+    ),
+  );
   AndroidEqualizer? _equalizer;
 
   List<Track> queue = [];
@@ -56,8 +67,10 @@ class PlayerController extends ChangeNotifier {
   bool _loading = false;
   bool _handlingComplete = false;
   String? _loadedPath;
+  _FileEditHold? _fileEdit;
   final List<int> _history = [];
   int _errorSkips = 0;
+  static const _session = MethodChannel('com.nullmp3.nullmp3/session');
 
   Track? get current {
     if (queue.isEmpty || index < 0 || index >= queue.length) return null;
@@ -75,6 +88,42 @@ class PlayerController extends ChangeNotifier {
     try {
       await player.setPitch(settings.pitch);
     } catch (_) {}
+    _session.setMethodCallHandler((call) async {
+      switch (call.method) {
+        case 'play':
+          if (!playing) await playPause();
+        case 'pause':
+          if (playing) await playPause();
+        case 'next':
+          await next();
+        case 'previous':
+          await previous();
+      }
+    });
+    if (defaultTargetPlatform == TargetPlatform.android) {
+      try {
+        await Permission.notification.request();
+      } catch (_) {}
+    }
+    _pushSession();
+  }
+
+  void _pushSession() {
+    if (defaultTargetPlatform != TargetPlatform.android) return;
+    final track = current;
+    if (track == null) {
+      unawaited(_session.invokeMethod('clear'));
+      return;
+    }
+    unawaited(
+      _session.invokeMethod('update', {
+        'playing': playing,
+        'title': track.title,
+        'artist': track.artist,
+        'durationMs': track.durationMs,
+        'positionMs': player.position.inMilliseconds,
+      }),
+    );
   }
 
   Future<void> playTracks(List<Track> tracks, {int start = 0}) async {
@@ -212,6 +261,48 @@ class PlayerController extends ChangeNotifier {
     } catch (_) {}
   }
 
+  /// Release the file so tags can be rewritten without killing playback.
+  Future<void> beginFileEdit(String path) async {
+    if (_loadedPath != path && current?.path != path) return;
+    _fileEdit = _FileEditHold(
+      playing: playing,
+      position: player.position,
+      path: path,
+    );
+    _loading = true;
+    try {
+      await player.stop().timeout(const Duration(milliseconds: 400));
+    } catch (_) {}
+    _loadedPath = null;
+  }
+
+  Future<void> endFileEdit(Track updated, {String? fromPath}) async {
+    final hold = _fileEdit;
+    _fileEdit = null;
+    replaceQueuedTrack(updated, fromPath: fromPath ?? hold?.path ?? updated.path);
+    if (hold == null || current?.path != updated.path) {
+      _loading = false;
+      notifyListeners();
+      return;
+    }
+    await _loadCurrent(play: hold.playing, position: hold.position);
+  }
+
+  Future<void> cancelFileEdit() async {
+    final hold = _fileEdit;
+    _fileEdit = null;
+    if (hold == null) {
+      _loading = false;
+      return;
+    }
+    if (current?.path != hold.path) {
+      _loading = false;
+      notifyListeners();
+      return;
+    }
+    await _loadCurrent(play: hold.playing, position: hold.position);
+  }
+
   void replaceQueuedTrack(Track updated, {String? fromPath}) {
     final oldPath = fromPath ?? updated.path;
     queue = [
@@ -221,6 +312,7 @@ class PlayerController extends ChangeNotifier {
     if (_loadedPath == oldPath) _loadedPath = updated.path;
     if (_lastCountedPath == oldPath) _lastCountedPath = updated.path;
     notifyListeners();
+    _pushSession();
   }
 
   Future<void> retargetQueuedTrack(
@@ -340,13 +432,44 @@ class PlayerController extends ChangeNotifier {
     final gen = ++_loadGen;
     _loading = true;
     try {
-      await player.setAudioSource(
-        track.path.startsWith('content:')
-            ? AudioSource.uri(Uri.parse(track.path), tag: track)
-            : AudioSource.file(track.path, tag: track),
-        initialPosition: position,
-        preload: true,
-      );
+      String playPath = track.path;
+      try {
+        repairDamagedAudioFile(track.path);
+      } catch (_) {}
+      var cache = PlaybackCache.dir;
+      if (cache == null) {
+        await PlaybackCache.init();
+        cache = PlaybackCache.dir;
+      }
+      if (cache != null) {
+        final args = {'path': track.path, 'cache': cache};
+        try {
+          playPath = await compute(preparePlaybackPath, args).timeout(const Duration(seconds: 20));
+        } catch (_) {
+          try {
+            playPath = preparePlaybackPath(args);
+          } catch (_) {
+            playPath = track.path;
+          }
+        }
+      }
+      Future<Duration?> setSource(String path) {
+        return player.setAudioSource(
+          path.startsWith('content:')
+              ? AudioSource.uri(Uri.parse(path), tag: track)
+              : AudioSource.file(path, tag: track),
+          preload: true,
+        );
+      }
+
+      try {
+        await setSource(playPath).timeout(const Duration(seconds: 8));
+      } catch (error) {
+        debugPrint('setAudioSource failed for $playPath: $error');
+        await Future<void>.delayed(const Duration(milliseconds: 250));
+        if (gen != _loadGen) return;
+        await setSource(playPath).timeout(const Duration(seconds: 8));
+      }
       if (gen != _loadGen) return;
       _loadedPath = track.path;
       _errorSkips = 0;
@@ -358,7 +481,20 @@ class PlayerController extends ChangeNotifier {
         await player.setPitch(settings.pitch);
       } catch (_) {}
       await player.setVolume(settings.volume);
-      if (play) await player.play();
+      if (position > const Duration(milliseconds: 400)) {
+        try {
+          if (player.processingState != ProcessingState.ready) {
+            await player.processingStateStream
+                .firstWhere((state) => state == ProcessingState.ready)
+                .timeout(const Duration(seconds: 2));
+          }
+        } catch (_) {}
+        if (gen != _loadGen) return;
+        try {
+          await player.seek(position).timeout(const Duration(seconds: 2));
+        } catch (_) {}
+      }
+      if (play) await player.play().timeout(const Duration(seconds: 3));
     } catch (_) {
       if (gen != _loadGen) return;
       _loadedPath = null;
@@ -372,6 +508,7 @@ class PlayerController extends ChangeNotifier {
     }
     unawaited(_extractColor());
     unawaited(_persistSession());
+    _pushSession();
     notifyListeners();
   }
 
@@ -399,7 +536,7 @@ class PlayerController extends ChangeNotifier {
   }
 
   Future<void> _onCompleted() async {
-    if (_handlingComplete || _loading) return;
+    if (_handlingComplete || _loading || _fileEdit != null) return;
     _handlingComplete = true;
     try {
       if (_stopAfterTrack) {
@@ -454,6 +591,11 @@ class PlayerController extends ChangeNotifier {
     if (gen != _loadGen) return;
     if (bytes == null || bytes.isEmpty) {
       artworkColor = null;
+      notifyListeners();
+      return;
+    }
+    if (isAnimatedCover(bytes)) {
+      artworkColor = const Color(0xFF1C3A48);
       notifyListeners();
       return;
     }
@@ -524,4 +666,16 @@ class PlayerController extends ChangeNotifier {
     player.dispose();
     super.dispose();
   }
+}
+
+class _FileEditHold {
+  const _FileEditHold({
+    required this.playing,
+    required this.position,
+    required this.path,
+  });
+
+  final bool playing;
+  final Duration position;
+  final String path;
 }
