@@ -228,7 +228,7 @@ class _ArtworkAtmosphere extends StatelessWidget {
           fit: StackFit.expand,
           children: [
             ColoredBox(color: tint),
-            if (bytes != null && bytes.isNotEmpty && !isVideoBytes(bytes))
+            if (bytes != null && bytes.isNotEmpty && !isVideoBytes(bytes) && !isAnimatedCover(bytes))
               Opacity(
                 opacity: 0.42,
                 child: ImageFiltered(

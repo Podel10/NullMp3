@@ -130,8 +130,10 @@ class _CoverArtState extends State<CoverArt> {
       child = Center(child: AspectRatio(aspectRatio: 1, child: child));
     }
     final animated = _bytes != null && isAnimatedCover(_bytes!);
-    if (widget.heroTag == null || animated) return child;
-    return Hero(tag: widget.heroTag!, child: child);
+    if (widget.heroTag == null || animated) {
+      return RepaintBoundary(child: child);
+    }
+    return Hero(tag: widget.heroTag!, child: RepaintBoundary(child: child));
   }
 }
 

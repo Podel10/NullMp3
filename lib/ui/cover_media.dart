@@ -32,11 +32,19 @@ class CoverBytesView extends StatelessWidget {
       return errorBuilder?.call(context, 'video', StackTrace.empty) ??
           const ColoredBox(color: Color(0xFF3A4A56));
     }
-    if (animate && (isGifBytes(bytes) || isWebpBytes(bytes))) {
-      return _AnimatedRasterCover(
+    if (isGifBytes(bytes) || isWebpBytes(bytes)) {
+      if (animate) {
+        return _AnimatedRasterCover(
+          bytes: bytes,
+          fit: fit,
+          playing: playing,
+          errorBuilder: errorBuilder,
+        );
+      }
+      return _StillRasterCover(
         bytes: bytes,
         fit: fit,
-        playing: playing,
+        cacheWidth: cacheWidth,
         errorBuilder: errorBuilder,
       );
     }
@@ -46,6 +54,91 @@ class CoverBytesView extends StatelessWidget {
       cacheWidth: cacheWidth,
       filterQuality: filterQuality,
       errorBuilder: errorBuilder,
+    );
+  }
+}
+
+class _StillRasterCover extends StatefulWidget {
+  const _StillRasterCover({
+    required this.bytes,
+    required this.fit,
+    this.cacheWidth,
+    this.errorBuilder,
+  });
+
+  final Uint8List bytes;
+  final BoxFit fit;
+  final int? cacheWidth;
+  final ImageErrorWidgetBuilder? errorBuilder;
+
+  @override
+  State<_StillRasterCover> createState() => _StillRasterCoverState();
+}
+
+class _StillRasterCoverState extends State<_StillRasterCover> {
+  ui.Image? _image;
+  Object? _token;
+  var _failed = false;
+
+  @override
+  void initState() {
+    super.initState();
+    unawaited(_decode());
+  }
+
+  @override
+  void didUpdateWidget(covariant _StillRasterCover oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (!identical(oldWidget.bytes, widget.bytes) || oldWidget.cacheWidth != widget.cacheWidth) {
+      unawaited(_decode());
+    }
+  }
+
+  @override
+  void dispose() {
+    _token = null;
+    _image?.dispose();
+    _image = null;
+    super.dispose();
+  }
+
+  Future<void> _decode() async {
+    final token = Object();
+    _token = token;
+    _image?.dispose();
+    _image = null;
+    _failed = false;
+    try {
+      final codec = await ui.instantiateImageCodec(
+        widget.bytes,
+        targetWidth: widget.cacheWidth,
+      );
+      final frame = await codec.getNextFrame();
+      codec.dispose();
+      if (!mounted || !identical(_token, token)) {
+        frame.image.dispose();
+        return;
+      }
+      setState(() => _image = frame.image);
+    } catch (_) {
+      if (mounted && identical(_token, token)) setState(() => _failed = true);
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    if (_failed) {
+      return widget.errorBuilder?.call(context, 'gif', StackTrace.empty) ??
+          const ColoredBox(color: Color(0xFF3A4A56));
+    }
+    final image = _image;
+    if (image == null) return const ColoredBox(color: Color(0xFF3A4A56));
+    return RawImage(
+      image: image,
+      fit: widget.fit,
+      width: double.infinity,
+      height: double.infinity,
+      filterQuality: FilterQuality.low,
     );
   }
 }

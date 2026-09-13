@@ -1,6 +1,5 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
-import 'package:google_fonts/google_fonts.dart';
 
 enum AppThemeId { system, dark, black, midnight, light, sand, custom, gallery }
 
@@ -109,9 +108,7 @@ class AppTheme {
     bool wallpaper = false,
   }) {
     final isDark = brightness == Brightness.dark;
-    final textTheme = GoogleFonts.outfitTextTheme(
-      isDark ? ThemeData.dark().textTheme : ThemeData.light().textTheme,
-    ).apply(
+    final textTheme = (isDark ? ThemeData.dark().textTheme : ThemeData.light().textTheme).apply(
       fontFamilyFallback: const [
         'Microsoft YaHei',
         'Noto Sans SC',

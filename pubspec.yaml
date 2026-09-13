@@ -41,7 +41,6 @@ dependencies:
   permission_handler: ^13.0.2
   file_picker: ^12.2.0
   provider: ^6.1.5+1
-  google_fonts: ^8.2.1
   path_provider: ^2.1.6
   shared_preferences: ^2.5.5
   palette_generator: ^0.3.3+7

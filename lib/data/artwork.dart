@@ -8,7 +8,7 @@ import 'package:path_provider/path_provider.dart';
 
 import 'cover_image.dart';
 
-const _artworkExts = ['gif', 'webp', 'mp4', 'webm', 'bin'];
+const _artworkExts = ['bin', 'gif', 'webp', 'mp4', 'webm'];
 
 Uint8List? extractArtworkBytes(String trackPath) {
   try {
