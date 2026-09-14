@@ -37,6 +37,8 @@ class SettingsController extends ChangeNotifier {
   static const _kCrossfade = 'crossfade';
   static const _kContinuous = 'continuousPlayback';
   static const _kLanguage = 'language';
+  static const _kStatsEnabled = 'statsEnabled';
+  static const _kBeatHalo = 'beatHalo';
 
   late SharedPreferences _prefs;
 
@@ -60,6 +62,8 @@ class SettingsController extends ChangeNotifier {
   bool pauseFade = false;
   bool crossfade = false;
   bool continuous = true;
+  bool statsEnabled = true;
+  bool beatHalo = false;
   AppLanguage language = AppLanguage.english;
 
   bool _loaded = false;
@@ -129,6 +133,8 @@ class SettingsController extends ChangeNotifier {
     pauseFade = _prefs.getBool(_kPauseFade) ?? false;
     crossfade = _prefs.getBool(_kCrossfade) ?? false;
     continuous = _prefs.getBool(_kContinuous) ?? true;
+    statsEnabled = _prefs.getBool(_kStatsEnabled) ?? true;
+    beatHalo = _prefs.getBool(_kBeatHalo) ?? false;
     eqEnabled = _prefs.getBool(_kEqOn) ?? true;
     eqPreset = _prefs.getString(_kEqPreset) ?? 'Normal';
     language = AppLanguage.fromName(_prefs.getString(_kLanguage));
@@ -241,6 +247,18 @@ class SettingsController extends ChangeNotifier {
   Future<void> setPitch(double value, {bool persist = true}) async {
     pitch = value.clamp(0.5, 1.5);
     if (persist) await _prefs.setDouble(_kPitch, pitch);
+    notifyListeners();
+  }
+
+  Future<void> setBeatHalo(bool value) async {
+    beatHalo = value;
+    await _prefs.setBool(_kBeatHalo, value);
+    notifyListeners();
+  }
+
+  Future<void> setStatsEnabled(bool value) async {
+    statsEnabled = value;
+    await _prefs.setBool(_kStatsEnabled, value);
     notifyListeners();
   }
 

@@ -32,6 +32,7 @@ class CoverArt extends StatefulWidget {
     this.muted = false,
     this.loadArtwork,
     this.animate = false,
+    this.softEdge = false,
   });
 
   final Track? track;
@@ -42,6 +43,7 @@ class CoverArt extends StatefulWidget {
   final bool muted;
   final bool? loadArtwork;
   final bool animate;
+  final bool softEdge;
 
   @override
   State<CoverArt> createState() => _CoverArtState();
@@ -126,6 +128,23 @@ class _CoverArtState extends State<CoverArt> {
             borderRadius: BorderRadius.circular(widget.radius),
             child: child,
           );
+    if (widget.softEdge) {
+      child = ShaderMask(
+        blendMode: BlendMode.dstIn,
+        shaderCallback: (bounds) {
+          return RadialGradient(
+            colors: const [
+              Color(0xFFFFFFFF),
+              Color(0xFFFFFFFF),
+              Color(0xB3FFFFFF),
+              Color(0x00FFFFFF),
+            ],
+            stops: circle ? const [0.0, 0.76, 0.88, 1.0] : const [0.0, 0.82, 0.92, 1.0],
+          ).createShader(bounds);
+        },
+        child: child,
+      );
+    }
     if (widget.expand && circle) {
       child = Center(child: AspectRatio(aspectRatio: 1, child: child));
     }
@@ -430,7 +449,7 @@ void showSleepTimerSheet(BuildContext context) {
                 ListTile(
                   dense: true,
                   visualDensity: VisualDensity.compact,
-                  leading: const Icon(Icons.nights_stay_outlined),
+                  leading: const Icon(Icons.alarm_outlined),
                   title: Text(context.s.minutesLabel(minutes)),
                   onTap: () {
                     player.setSleepTimer(Duration(minutes: minutes));

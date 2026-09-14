@@ -1,11 +1,13 @@
 import 'dart:typed_data';
 
 import 'package:flutter/material.dart';
+import 'package:provider/provider.dart';
 
 import '../data/artwork.dart';
 import '../data/cover_image.dart';
 import '../l10n/strings.dart';
 import '../models/models.dart';
+import '../state/settings.dart';
 import 'cover_media.dart';
 import 'widgets.dart';
 
@@ -238,6 +240,13 @@ class _TagEditorSheetState extends State<TagEditorSheet> {
                         label: s.shapeCircle,
                       ),
                     ],
+                  ),
+                  SwitchListTile(
+                    contentPadding: EdgeInsets.zero,
+                    title: Text(s.beatHalo, style: const TextStyle(color: Colors.white)),
+                    subtitle: Text(s.beatHaloHint, style: const TextStyle(color: Colors.white54, fontSize: 12)),
+                    value: context.watch<SettingsController>().beatHalo,
+                    onChanged: (value) => context.read<SettingsController>().setBeatHalo(value),
                   ),
                   Align(
                     alignment: Alignment.centerLeft,

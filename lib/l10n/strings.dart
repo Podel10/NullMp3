@@ -30,7 +30,7 @@ enum AppLanguage {
 }
 
 extension AppL10n on BuildContext {
-  S get s => S(Provider.of<SettingsController>(this).language);
+  S get s => S(Provider.of<SettingsController>(this, listen: false).language);
 }
 
 class S {
@@ -142,6 +142,29 @@ class S {
   String get skipShortTracks => _t('Skip short tracks', 'Пропускать короткие треки', '跳过短音频');
   String seconds(int n) => _t('$n seconds', '$n секунд', '$n 秒');
   String get librarySizeLabel => _t('Library size', 'Размер библиотеки', '曲库规模');
+  String get statistics => _t('Statistics', 'Статистика', '统计');
+  String get listenTime => _t('Listening time', 'Время прослушивания', '收听时长');
+  String get tracksListened => _t('Tracks listened', 'Прослушанных треков', '已听歌曲');
+  String listenHours(int milliseconds) {
+    final minutes = (milliseconds / 60000).floor();
+    final hours = minutes ~/ 60;
+    final rest = minutes % 60;
+    if (hours <= 0) {
+      return _t('$minutes min', '$minutes мин', '$minutes 分钟');
+    }
+    if (rest == 0) {
+      return _t('$hours h', '$hours ч', '$hours 小时');
+    }
+    return _t('$hours h $rest min', '$hours ч $rest мин', '$hours 小时 $rest 分钟');
+  }
+  String get disableStatistics => _t('Disable statistics', 'Отключить статистику', '关闭统计');
+  String get enableStatistics => _t('Enable statistics', 'Включить статистику', '开启统计');
+  String get statisticsOffHint => _t(
+        'Listening stats were deleted and are no longer saved.',
+        'Статистика удалена и больше не сохраняется.',
+        '统计已清除，不再保存。',
+      );
+
   String get hiddenSongs => _t('Hidden songs', 'Скрытые песни', '已隐藏歌曲');
   String get nothingHidden => _t('Nothing hidden', 'Ничего не скрыто', '没有隐藏歌曲');
   String get hiddenHint => _t(
@@ -188,10 +211,26 @@ class S {
   String get coverShape => _t('Cover shape', 'Форма обложки', '封面形状');
   String get shapeSquare => _t('Square', 'Квадрат', '方形');
   String get shapeCircle => _t('Circle', 'Круг', '圆形');
+  String get beatHalo => _t('Beat waves', 'Волны под бит', '节拍光环');
+  String get beatHaloHint => _t(
+        'Pulses with the playing audio. Android may ask for the microphone — that is how the system reads the player spectrum, it is not recording.',
+        'Пульсирует по реальному звуку. Android может спросить микрофон — так система отдаёт спектр плеера, запись не идёт.',
+        '随正在播放的音频脉冲。Android 可能请求麦克风权限——系统用它读取播放器频谱，并不会录音。',
+      );
   String get details => _t('Details', 'Подробнее', '详情');
   String get playbackSpeed => _t('Playback speed', 'Скорость воспроизведения', '播放速度');
-  String get ringtoneEditor => _t('Ringtone editor', 'Редактор рингтонов', '铃声编辑');
-  String get ringtoneLater => _t('Ringtone editor coming later', 'Редактор рингтонов появится позже', '铃声编辑稍后推出');
+  String get musicEditor => _t('Music editor', 'Редактор музыки', '音乐编辑');
+  String get ringtoneEditor => musicEditor;
+  String selectionMeta(double seconds, String format, int sampleRate, int bitrate) {
+    final sec = seconds.toStringAsFixed(2);
+    return _t(
+      '$sec s selected. $format, $sampleRate Hz, $bitrate kbps',
+      '$sec с выбрано. $format, $sampleRate Hz, $bitrate kbps',
+      '已选 $sec 秒。$format，$sampleRate Hz，$bitrate kbps',
+    );
+  }
+  String cutSaved(String title) => _t('Saved "$title"', 'Сохранено «$title»', '已保存“$title”');
+  String get cutFailed => _t('Could not save the cut', 'Не удалось сохранить обрезанный файл', '无法保存剪辑');
   String get drivingMode => _t('Driving mode', 'Режим «За рулём»', '驾驶模式');
   String get lockScreen => _t('Lock screen', 'Экран блокировки', '锁屏播放');
   String get hide => _t('Hide', 'Скрыть', '隐藏');

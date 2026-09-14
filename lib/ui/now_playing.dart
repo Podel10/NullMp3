@@ -11,6 +11,7 @@ import '../l10n/strings.dart';
 import '../models/models.dart';
 import '../state/settings.dart';
 import '../theme/app_theme.dart';
+import 'beat_halo.dart';
 import 'widgets.dart';
 
 class NowPlayingScreen extends StatelessWidget {
@@ -23,7 +24,8 @@ class NowPlayingScreen extends StatelessWidget {
     final player = contextPlayer(context);
     final track = player.current;
     final theme = Theme.of(context);
-    final gallery = context.watch<SettingsController>().themeId == AppThemeId.gallery;
+    final settings = context.watch<SettingsController>();
+    final gallery = settings.themeId == AppThemeId.gallery;
 
     if (track == null) {
       return Scaffold(
@@ -36,6 +38,7 @@ class NowPlayingScreen extends StatelessWidget {
     final ambient = AppTheme.ambientFromArtwork(player.artworkColor, dark: dark);
     final onAmbient = ambient.computeLuminance() < 0.45 ? Colors.white : const Color(0xFF1A1512);
     final muted = onAmbient.withValues(alpha: 0.62);
+    final haloColor = _haloFromArtwork(player.artworkColor, theme.colorScheme.primary);
     final playFill = dark ? Colors.white : const Color(0xFF111111);
     final playIcon = dark ? const Color(0xFF111111) : Colors.white;
 
@@ -94,14 +97,23 @@ class NowPlayingScreen extends StatelessWidget {
                         child: SizedBox(
                           width: side,
                           height: side,
-                          child: CoverArt(
-                            track: track,
-                            radius: 10,
-                            expand: true,
-                            muted: true,
-                            loadArtwork: true,
-                            animate: true,
-                            heroTag: 'now-art',
+                          child: BeatHalo(
+                            enabled: settings.beatHalo,
+                            playing: player.playing,
+                            circle: track.isCircleCover,
+                            color: haloColor,
+                            sessionId: player.player.androidAudioSessionId,
+                            sessionIds: player.player.androidAudioSessionIdStream,
+                            child: CoverArt(
+                              track: track,
+                              radius: 10,
+                              expand: true,
+                              muted: true,
+                              loadArtwork: true,
+                              animate: true,
+                              softEdge: settings.beatHalo,
+                              heroTag: 'now-art',
+                            ),
                           ),
                         ),
                       );
@@ -202,6 +214,15 @@ class NowPlayingScreen extends StatelessWidget {
     if (embedded) return body;
     return Scaffold(backgroundColor: gallery ? Colors.transparent : ambient, body: body);
   }
+}
+
+Color _haloFromArtwork(Color? source, Color fallback) {
+  final base = source ?? fallback;
+  final hsl = HSLColor.fromColor(base);
+  return hsl
+      .withSaturation((hsl.saturation * 1.2).clamp(0.38, 0.95))
+      .withLightness(hsl.lightness.clamp(0.48, 0.72))
+      .toColor();
 }
 
 class _ArtworkAtmosphere extends StatelessWidget {
