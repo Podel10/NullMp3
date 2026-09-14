@@ -2,6 +2,7 @@ import 'dart:async';
 import 'dart:convert';
 import 'dart:math' as math;
 
+import 'package:audio_session/audio_session.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
@@ -26,7 +27,11 @@ class PlayerController extends ChangeNotifier {
     });
 
     player.processingStateStream.listen((state) {
-      if (state == ProcessingState.completed && !_loading && _fileEdit == null && !_handlingComplete) {
+      if (state == ProcessingState.completed &&
+          !_loading &&
+          _fileEdit == null &&
+          !_handlingComplete &&
+          _isNearEnd()) {
         unawaited(_onCompleted());
       }
     });
@@ -42,7 +47,10 @@ class PlayerController extends ChangeNotifier {
   final SettingsController settings;
 
   // Created synchronously so the UI can bind streams immediately.
+  // Interruptions are handled below: keep playing when another app takes
+  // media focus, but still pause for phone calls and unplugged headphones.
   final AudioPlayer player = AudioPlayer(
+    handleInterruptions: false,
     maxSkipsOnError: 8,
     androidAudioOffloadPreferences: const AndroidAudioOffloadPreferences(
       audioOffloadMode: AndroidAudioOffloadMode.disabled,
@@ -70,6 +78,9 @@ class PlayerController extends ChangeNotifier {
   _FileEditHold? _fileEdit;
   final List<int> _history = [];
   int _errorSkips = 0;
+  bool _resumeAfterInterruption = false;
+  StreamSubscription<void>? _noisySub;
+  StreamSubscription<AudioInterruptionEvent>? _interruptSub;
   static const _session = MethodChannel('com.nullmp3.nullmp3/session');
 
   Track? get current {
@@ -88,6 +99,7 @@ class PlayerController extends ChangeNotifier {
     try {
       await player.setPitch(settings.pitch);
     } catch (_) {}
+    await _configureAudioSession();
     _session.setMethodCallHandler((call) async {
       switch (call.method) {
         case 'play':
@@ -126,6 +138,44 @@ class PlayerController extends ChangeNotifier {
     );
   }
 
+  Future<void> _configureAudioSession() async {
+    try {
+      final session = await AudioSession.instance;
+      await session.configure(
+        const AudioSessionConfiguration(
+          avAudioSessionCategory: AVAudioSessionCategory.playback,
+          avAudioSessionCategoryOptions: AVAudioSessionCategoryOptions.mixWithOthers,
+          avAudioSessionMode: AVAudioSessionMode.defaultMode,
+          androidAudioAttributes: AndroidAudioAttributes(
+            contentType: AndroidAudioContentType.music,
+            usage: AndroidAudioUsage.media,
+          ),
+          androidAudioFocusGainType: AndroidAudioFocusGainType.gain,
+          androidWillPauseWhenDucked: false,
+        ),
+      );
+      _noisySub = session.becomingNoisyEventStream.listen((_) {
+        _resumeAfterInterruption = false;
+        if (playing) unawaited(player.pause());
+      });
+      _interruptSub = session.interruptionEventStream.listen((event) {
+        if (event.begin) {
+          // Transient loss is a call / alarm. Permanent loss is another
+          // media app — keep playing so both can overlap.
+          if (event.type == AudioInterruptionType.pause && playing) {
+            _resumeAfterInterruption = true;
+            unawaited(player.pause());
+          }
+          return;
+        }
+        if (event.type == AudioInterruptionType.pause && _resumeAfterInterruption) {
+          _resumeAfterInterruption = false;
+          unawaited(player.play());
+        }
+      });
+    } catch (_) {}
+  }
+
   Future<void> playTracks(List<Track> tracks, {int start = 0}) async {
     if (tracks.isEmpty) return;
     queue = List<Track>.from(tracks);
@@ -147,33 +197,51 @@ class PlayerController extends ChangeNotifier {
     notifyListeners();
   }
 
+  bool _isNearEnd() {
+    final duration = player.duration;
+    final position = player.position;
+    if (duration == null || duration.inMilliseconds <= 0) {
+      return position.inMilliseconds > 1500;
+    }
+    return position >= duration - const Duration(milliseconds: 1200);
+  }
+
   Future<void> playPause() async {
+    _resumeAfterInterruption = false;
     if (!hasTrack) return;
+    final isPlaying = playing || player.playing;
+    if (isPlaying) {
+      if (settings.pauseFade) {
+        await _fadeVolume(0, const Duration(milliseconds: 300));
+        await player.pause();
+        await player.setVolume(settings.volume);
+      } else {
+        await player.pause();
+      }
+      return;
+    }
     if (_loadedPath != current!.path) {
       await _loadCurrent(play: true);
       return;
     }
     if (player.processingState == ProcessingState.completed) {
-      await _loadCurrent(play: true);
-      return;
-    }
-    if (settings.pauseFade) {
-      if (playing) {
-        await _fadeVolume(0, const Duration(milliseconds: 300));
-        await player.pause();
-        await player.setVolume(settings.volume);
+      if (_isNearEnd()) {
+        await _loadCurrent(play: true);
       } else {
-        await player.setVolume(0);
+        try {
+          await player.seek(player.position);
+        } catch (_) {}
         await player.play();
-        await _fadeVolume(settings.volume, const Duration(milliseconds: 300));
       }
       return;
     }
-    if (playing) {
-      await player.pause();
-    } else {
+    if (settings.pauseFade) {
+      await player.setVolume(0);
       await player.play();
+      await _fadeVolume(settings.volume, const Duration(milliseconds: 300));
+      return;
     }
+    await player.play();
   }
 
   Future<void> next() => _skipTo(_nextIndex());
@@ -663,6 +731,8 @@ class PlayerController extends ChangeNotifier {
   @override
   void dispose() {
     _sleepTimer?.cancel();
+    unawaited(_noisySub?.cancel());
+    unawaited(_interruptSub?.cancel());
     player.dispose();
     super.dispose();
   }

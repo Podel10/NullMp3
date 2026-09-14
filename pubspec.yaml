@@ -37,6 +37,7 @@ dependencies:
   # Use with the CupertinoIcons class for iOS style icons.
   cupertino_icons: ^1.0.8
   just_audio: ^0.10.6
+  audio_session: ^0.2.4
   audio_metadata_reader: ^1.7.1
   permission_handler: ^13.0.2
   file_picker: ^12.2.0
