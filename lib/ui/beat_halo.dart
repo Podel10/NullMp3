@@ -8,6 +8,8 @@ import 'package:flutter/scheduler.dart';
 import 'package:flutter/services.dart';
 import 'package:permission_handler/permission_handler.dart';
 
+import '../data/artwork.dart';
+
 class BeatHalo extends StatefulWidget {
   const BeatHalo({
     super.key,
@@ -16,6 +18,7 @@ class BeatHalo extends StatefulWidget {
     required this.playing,
     required this.circle,
     required this.color,
+    this.artworkPath,
     this.sessionId,
     this.sessionIds,
   });
@@ -25,6 +28,7 @@ class BeatHalo extends StatefulWidget {
   final bool playing;
   final bool circle;
   final Color color;
+  final String? artworkPath;
   final int? sessionId;
   final Stream<int?>? sessionIds;
 
@@ -35,8 +39,8 @@ class BeatHalo extends StatefulWidget {
 class _BeatHaloState extends State<BeatHalo> with SingleTickerProviderStateMixin {
   static const _methods = MethodChannel('com.nullmp3.nullmp3/halo');
   static const _events = EventChannel('com.nullmp3.nullmp3/haloEvents');
-  static const _pad = 48.0;
-
+  final GlobalKey _coverKey = GlobalKey();
+  Rect _coverRect = Rect.zero;
   late final Ticker _ticker;
   StreamSubscription<dynamic>? _sub;
   StreamSubscription<int?>? _sessionSub;
@@ -47,7 +51,10 @@ class _BeatHaloState extends State<BeatHalo> with SingleTickerProviderStateMixin
   int? _sessionId;
   int? _listeningSession;
   int _syncGen = 0;
+  int _rimGen = 0;
+  int _artGen = -1;
   bool _live = false;
+  List<Color> _rim = const [];
 
   @override
   void initState() {
@@ -55,7 +62,9 @@ class _BeatHaloState extends State<BeatHalo> with SingleTickerProviderStateMixin
     _sessionId = widget.sessionId;
     _ticker = createTicker(_onTick)..start();
     _sessionSub = widget.sessionIds?.listen(_onSession);
+    ArtworkStore.instance.addListener(_onArtwork);
     _syncCapture();
+    unawaited(_loadRim());
   }
 
   @override
@@ -73,15 +82,45 @@ class _BeatHaloState extends State<BeatHalo> with SingleTickerProviderStateMixin
         oldWidget.sessionId != widget.sessionId) {
       _syncCapture();
     }
+    if (oldWidget.artworkPath != widget.artworkPath ||
+        oldWidget.circle != widget.circle ||
+        oldWidget.enabled != widget.enabled) {
+      unawaited(_loadRim());
+    }
   }
 
   @override
   void dispose() {
+    ArtworkStore.instance.removeListener(_onArtwork);
     unawaited(_stopCapture());
     _sub?.cancel();
     _sessionSub?.cancel();
     _ticker.dispose();
     super.dispose();
+  }
+
+  void _onArtwork() {
+    final path = widget.artworkPath;
+    if (path == null) return;
+    if (ArtworkStore.instance.generationOf(path) != _artGen) {
+      unawaited(_loadRim());
+    }
+  }
+
+  Future<void> _loadRim() async {
+    final gen = ++_rimGen;
+    final path = widget.artworkPath;
+    if (!widget.enabled || path == null || path.isEmpty) {
+      _artGen = -1;
+      if (_rim.isNotEmpty && mounted) setState(() => _rim = const []);
+      return;
+    }
+    _artGen = ArtworkStore.instance.generationOf(path);
+    final bytes = await ArtworkStore.instance.get(path);
+    if (!mounted || gen != _rimGen) return;
+    final rim = await _sampleCoverRim(bytes, circle: widget.circle);
+    if (!mounted || gen != _rimGen) return;
+    setState(() => _rim = rim);
   }
 
   void _onSession(int? id) {
@@ -197,97 +236,198 @@ class _BeatHaloState extends State<BeatHalo> with SingleTickerProviderStateMixin
     return lerpDouble(current, next, next > current ? up : down)!;
   }
 
+  void _measureCover() {
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted || !widget.enabled) return;
+      final coverBox = _coverKey.currentContext?.findRenderObject() as RenderBox?;
+      final hostBox = context.findRenderObject() as RenderBox?;
+      if (coverBox == null || hostBox == null || !coverBox.hasSize || !hostBox.hasSize) return;
+      final origin = coverBox.localToGlobal(Offset.zero, ancestor: hostBox);
+      final rect = origin & coverBox.size;
+      if ((rect.left - _coverRect.left).abs() < 0.5 &&
+          (rect.top - _coverRect.top).abs() < 0.5 &&
+          (rect.width - _coverRect.width).abs() < 0.5 &&
+          (rect.height - _coverRect.height).abs() < 0.5) {
+        return;
+      }
+      setState(() => _coverRect = rect);
+    });
+  }
+
   @override
   Widget build(BuildContext context) {
     if (!widget.enabled) return widget.child;
-    return Stack(
-      clipBehavior: Clip.none,
-      fit: StackFit.expand,
-      children: [
-        Positioned(
-          left: -_pad,
-          top: -_pad,
-          right: -_pad,
-          bottom: -_pad,
-          child: IgnorePointer(
-            child: CustomPaint(
-              painter: _HaloPainter(
-                peaks: List<double>.from(_peaks),
-                energy: _energy,
-                bass: _bass,
-                pulse: _pulse,
-                circle: widget.circle,
-                color: widget.color,
-                playing: widget.playing,
-                pad: _pad,
+    _measureCover();
+    return _HaloScope(
+      coverKey: _coverKey,
+      circle: widget.circle,
+      color: widget.color,
+      rim: _rim,
+      bass: _bass,
+      pulse: _pulse,
+      playing: widget.playing,
+      child: Stack(
+        fit: StackFit.expand,
+        clipBehavior: Clip.none,
+        children: [
+          Positioned.fill(
+            child: IgnorePointer(
+              child: CustomPaint(
+                painter: _HaloPainter(
+                  peaks: List<double>.from(_peaks),
+                  energy: _energy,
+                  bass: _bass,
+                  pulse: _pulse,
+                  circle: widget.circle,
+                  color: widget.color,
+                  rim: _rim,
+                  playing: widget.playing,
+                  cover: _coverRect,
+                ),
               ),
             ),
           ),
-        ),
-        widget.child,
-        IgnorePointer(
-          child: CustomPaint(
-            painter: _EdgeBlendPainter(
-              circle: widget.circle,
-              color: widget.color,
-              bass: _bass,
-              pulse: _pulse,
-              playing: widget.playing,
-            ),
-          ),
-        ),
-      ],
+          widget.child,
+        ],
+      ),
     );
+  }
+}
+
+class BeatHaloCover extends StatelessWidget {
+  const BeatHaloCover({super.key, required this.child});
+
+  final Widget child;
+
+  @override
+  Widget build(BuildContext context) {
+    final scope = _HaloScope.maybeOf(context);
+    if (scope == null) return child;
+    return KeyedSubtree(
+      key: scope.coverKey,
+      child: Stack(
+        fit: StackFit.expand,
+        children: [
+          child,
+          if (scope.circle)
+            IgnorePointer(
+              child: CustomPaint(
+                painter: _EdgeBlendPainter(
+                  color: scope.color,
+                  rim: scope.rim,
+                  bass: scope.bass,
+                  pulse: scope.pulse,
+                  playing: scope.playing,
+                ),
+              ),
+            ),
+        ],
+      ),
+    );
+  }
+}
+
+class _HaloScope extends InheritedWidget {
+  const _HaloScope({
+    required this.coverKey,
+    required this.circle,
+    required this.color,
+    required this.rim,
+    required this.bass,
+    required this.pulse,
+    required this.playing,
+    required super.child,
+  });
+
+  final GlobalKey coverKey;
+  final bool circle;
+  final Color color;
+  final List<Color> rim;
+  final double bass;
+  final double pulse;
+  final bool playing;
+
+  static _HaloScope? maybeOf(BuildContext context) {
+    return context.dependOnInheritedWidgetOfExactType<_HaloScope>();
+  }
+
+  @override
+  bool updateShouldNotify(_HaloScope old) {
+    return circle != old.circle ||
+        color != old.color ||
+        bass != old.bass ||
+        pulse != old.pulse ||
+        playing != old.playing ||
+        !listEquals(rim, old.rim);
   }
 }
 
 class _EdgeBlendPainter extends CustomPainter {
   _EdgeBlendPainter({
-    required this.circle,
     required this.color,
+    required this.rim,
     required this.bass,
     required this.pulse,
     required this.playing,
   });
 
-  final bool circle;
   final Color color;
+  final List<Color> rim;
   final double bass;
   final double pulse;
   final bool playing;
 
   @override
   void paint(Canvas canvas, Size size) {
-    final drive = (0.2 + 0.5 * bass + 0.55 * pulse).clamp(0.0, 1.0);
+    final drive = (0.2 + 0.5 * bass + 0.55 * pulse).clamp(0.0, 1.0).toDouble();
     final rect = Offset.zero & size;
-    final paint = Paint()
-      ..shader = RadialGradient(
-        colors: [
-          const Color(0x00000000),
-          const Color(0x00000000),
-          color.withValues(alpha: (playing ? 0.14 : 0.04) + drive * 0.16),
-          color.withValues(alpha: (playing ? 0.4 : 0.08) + drive * 0.2),
-          const Color(0x00000000),
-        ],
-        stops: const [0.0, 0.7, 0.84, 0.94, 1.0],
-      ).createShader(rect);
-    if (circle) {
-      canvas.drawOval(rect, paint);
-    } else {
-      canvas.drawRRect(
-        RRect.fromRectAndRadius(rect, const Radius.circular(10)),
-        paint,
+    final a0 = ((playing ? 0.14 : 0.04) + drive * 0.16).clamp(0.0, 1.0).toDouble();
+    final a1 = ((playing ? 0.4 : 0.08) + drive * 0.2).clamp(0.0, 1.0).toDouble();
+    final sweep = _rimSweep(rim, rect, 1);
+    if (sweep == null) {
+      canvas.drawOval(
+        rect,
+        Paint()
+          ..shader = RadialGradient(
+            colors: [
+              const Color(0x00000000),
+              const Color(0x00000000),
+              color.withValues(alpha: a0),
+              color.withValues(alpha: a1),
+              const Color(0x00000000),
+            ],
+            stops: const [0.0, 0.7, 0.84, 0.94, 1.0],
+          ).createShader(rect),
       );
+      return;
     }
+    canvas.saveLayer(rect, Paint());
+    canvas.drawOval(rect, Paint()..shader = sweep);
+    canvas.drawOval(
+      rect,
+      Paint()
+        ..blendMode = BlendMode.dstIn
+        ..shader = RadialGradient(
+          colors: [
+            const Color(0x00000000),
+            const Color(0x00000000),
+            Color.fromRGBO(255, 255, 255, a0),
+            Color.fromRGBO(255, 255, 255, a1),
+            const Color(0x00000000),
+          ],
+          stops: const [0.0, 0.7, 0.84, 0.94, 1.0],
+        ).createShader(rect),
+    );
+    canvas.restore();
   }
 
   @override
   bool shouldRepaint(covariant _EdgeBlendPainter old) {
     return old.color != color ||
-        old.circle != circle ||
         old.bass != bass ||
         old.pulse != pulse ||
-        old.playing != playing;
+        old.playing != playing ||
+        !listEquals(old.rim, rim);
   }
 }
 
@@ -299,8 +439,9 @@ class _HaloPainter extends CustomPainter {
     required this.pulse,
     required this.circle,
     required this.color,
+    required this.rim,
     required this.playing,
-    required this.pad,
+    required this.cover,
   });
 
   final List<double> peaks;
@@ -309,66 +450,104 @@ class _HaloPainter extends CustomPainter {
   final double pulse;
   final bool circle;
   final Color color;
+  final List<Color> rim;
   final bool playing;
-  final double pad;
+  final Rect cover;
 
   @override
   void paint(Canvas canvas, Size size) {
-    if (peaks.isEmpty) return;
-    final bounds = Rect.fromLTWH(pad, pad, size.width - pad * 2, size.height - pad * 2);
-    if (bounds.width <= 4 || bounds.height <= 4) return;
-
-    final hole = _outline(bounds, -32);
+    if (peaks.isEmpty || cover.width <= 4 || cover.height <= 4) return;
+    final bounds = cover;
+    final screen = Offset.zero & size;
+    final hole = _outline(bounds, -8);
     final smooth = _smooth(peaks);
     final outer = _plasmaOutline(bounds, smooth);
     final band = Path.combine(PathOperation.difference, outer, hole);
+    final drive = (0.2 + 0.5 * bass + 0.55 * pulse).clamp(0.0, 1.0).toDouble();
+    final reach = bounds.shortestSide * (2.05 + drive * 0.65);
+    final wash = _rimAverage(rim, color);
+    final sweepRect = Rect.fromCircle(center: bounds.center, radius: reach);
 
-    canvas.save();
-    final ring = Path.combine(
-      PathOperation.difference,
-      Path()..addRect(Offset.zero & size),
-      hole,
-    );
-    canvas.clipPath(ring);
-
-    final drive = (0.2 + 0.5 * bass + 0.55 * pulse).clamp(0.0, 1.0);
-    final bloom = playing ? 0.1 + drive * 0.42 : 0.04;
-    canvas.drawPath(
-      band,
-      Paint()
-        ..color = color.withValues(alpha: bloom)
-        ..maskFilter = const MaskFilter.blur(BlurStyle.normal, 36),
-    );
-    canvas.drawPath(
-      band,
-      Paint()
-        ..color = color.withValues(alpha: playing ? 0.14 + drive * 0.5 : 0.06)
-        ..maskFilter = const MaskFilter.blur(BlurStyle.normal, 16),
-    );
     canvas.drawRect(
-      bounds.inflate(pad),
+      screen,
       Paint()
         ..shader = RadialGradient(
           colors: [
-            color.withValues(alpha: 0),
-            color.withValues(alpha: 0),
-            color.withValues(alpha: (playing ? 0.5 : 0.12) * drive),
-            color.withValues(alpha: (playing ? 0.28 : 0.08) * drive),
-            color.withValues(alpha: 0),
+            wash.withValues(alpha: (playing ? 0.2 : 0.05) + drive * 0.28),
+            wash.withValues(alpha: (playing ? 0.1 : 0.03) + drive * 0.16),
+            wash.withValues(alpha: (playing ? 0.04 : 0.01) + drive * 0.06),
+            wash.withValues(alpha: 0),
           ],
-          stops: const [0.0, 0.7, 0.86, 0.94, 1.0],
-        ).createShader(bounds),
+          stops: const [0.18, 0.42, 0.7, 1.0],
+        ).createShader(Rect.fromCircle(center: bounds.center, radius: reach)),
+    );
+
+    canvas.save();
+    canvas.clipPath(
+      Path.combine(PathOperation.difference, Path()..addRect(screen), hole),
+    );
+
+    final bloom = playing ? 0.1 + drive * 0.42 : 0.04;
+    canvas.drawPath(
+      band,
+      _haloPaint(sweepRect, bloom, const MaskFilter.blur(BlurStyle.normal, 42)),
     );
     canvas.drawPath(
+      band,
+      _haloPaint(
+        sweepRect,
+        playing ? 0.14 + drive * 0.5 : 0.06,
+        const MaskFilter.blur(BlurStyle.normal, 18),
+      ),
+    );
+    if (circle) {
+      canvas.drawRect(
+        screen,
+        Paint()
+          ..shader = RadialGradient(
+            colors: [
+              wash.withValues(alpha: 0),
+              wash.withValues(alpha: 0),
+              wash.withValues(alpha: (playing ? 0.5 : 0.12) * drive),
+              wash.withValues(alpha: (playing ? 0.22 : 0.08) * drive),
+              wash.withValues(alpha: 0),
+            ],
+            stops: const [0.0, 0.62, 0.84, 0.94, 1.0],
+          ).createShader(bounds.inflate(bounds.shortestSide * 0.22)),
+      );
+    }
+    canvas.drawPath(
       outer,
-      Paint()
-        ..color = color.withValues(alpha: playing ? 0.28 + drive * 0.55 : 0.1)
-        ..style = PaintingStyle.stroke
-        ..strokeWidth = 2.4 + drive * 3.6
-        ..strokeJoin = StrokeJoin.round
-        ..maskFilter = const MaskFilter.blur(BlurStyle.normal, 5),
+      _haloPaint(
+        sweepRect,
+        playing ? 0.28 + drive * 0.55 : 0.1,
+        const MaskFilter.blur(BlurStyle.normal, 5),
+        style: PaintingStyle.stroke,
+        strokeWidth: 2.4 + drive * 3.6,
+      ),
     );
     canvas.restore();
+  }
+
+  Paint _haloPaint(
+    Rect sweepRect,
+    double alpha,
+    MaskFilter blur, {
+    PaintingStyle style = PaintingStyle.fill,
+    double strokeWidth = 0,
+  }) {
+    final paint = Paint()
+      ..style = style
+      ..strokeWidth = strokeWidth
+      ..strokeJoin = StrokeJoin.round
+      ..maskFilter = blur;
+    final shader = _rimSweep(rim, sweepRect, alpha);
+    if (shader != null) {
+      paint.shader = shader;
+    } else {
+      paint.color = color.withValues(alpha: alpha);
+    }
+    return paint;
   }
 
   List<double> _smooth(List<double> raw) {
@@ -486,7 +665,9 @@ class _HaloPainter extends CustomPainter {
         old.circle != circle ||
         old.color != color ||
         old.playing != playing ||
-        old.peaks != peaks;
+        old.peaks != peaks ||
+        old.cover != cover ||
+        !listEquals(old.rim, rim);
   }
 }
 
@@ -494,4 +675,107 @@ class _Edge {
   const _Edge(this.point, this.normal);
   final Offset point;
   final Offset normal;
+}
+
+const _rimBands = 16;
+
+/// Reads the colours around the edge of the cover once per artwork, so the
+/// halo can be tinted per direction without touching pixels while painting.
+Future<List<Color>> _sampleCoverRim(Uint8List? bytes, {required bool circle}) async {
+  if (bytes == null || bytes.length < 32) return const [];
+  try {
+    final codec = await instantiateImageCodec(bytes, targetWidth: 48);
+    final frame = await codec.getNextFrame();
+    final image = frame.image;
+    try {
+      final width = image.width;
+      final height = image.height;
+      if (width < 8 || height < 8) return const [];
+      final data = await image.toByteData(format: ImageByteFormat.rawRgba);
+      if (data == null) return const [];
+      final pixels = data.buffer.asUint8List();
+      final rim = <Color>[];
+      for (var i = 0; i < _rimBands; i++) {
+        final point = _rimPoint(i / _rimBands, width.toDouble(), height.toDouble(), circle);
+        rim.add(_rimColorAt(pixels, width, height, point));
+      }
+      return rim;
+    } finally {
+      image.dispose();
+    }
+  } catch (_) {
+    return const [];
+  }
+}
+
+/// Angle `t` runs clockwise from the top, matching [_HaloPainter._sample].
+Offset _rimPoint(double t, double width, double height, bool circle) {
+  final center = Offset(width / 2, height / 2);
+  final angle = t * math.pi * 2 - math.pi / 2;
+  final dir = Offset(math.cos(angle), math.sin(angle));
+  final halfW = width / 2;
+  final halfH = height / 2;
+  final double reach;
+  if (circle) {
+    reach = math.min(halfW, halfH);
+  } else {
+    final byX = dir.dx.abs() < 1e-4 ? double.infinity : halfW / dir.dx.abs();
+    final byY = dir.dy.abs() < 1e-4 ? double.infinity : halfH / dir.dy.abs();
+    reach = math.min(byX, byY);
+  }
+  return center + dir * reach * 0.88;
+}
+
+Color _rimColorAt(Uint8List rgba, int width, int height, Offset point) {
+  var r = 0;
+  var g = 0;
+  var b = 0;
+  var count = 0;
+  final cx = point.dx.round();
+  final cy = point.dy.round();
+  for (var dy = -1; dy <= 1; dy++) {
+    for (var dx = -1; dx <= 1; dx++) {
+      final x = (cx + dx).clamp(0, width - 1);
+      final y = (cy + dy).clamp(0, height - 1);
+      final i = (y * width + x) * 4;
+      if (rgba[i + 3] < 8) continue;
+      r += rgba[i];
+      g += rgba[i + 1];
+      b += rgba[i + 2];
+      count++;
+    }
+  }
+  if (count == 0) return const Color(0xFF1C3A48);
+  final base = Color.fromARGB(255, r ~/ count, g ~/ count, b ~/ count);
+  final hsl = HSLColor.fromColor(base);
+  return hsl
+      .withSaturation((hsl.saturation * 1.25).clamp(0.0, 0.95).toDouble())
+      .withLightness(hsl.lightness.clamp(0.4, 0.74).toDouble())
+      .toColor();
+}
+
+/// Ring of cover colours as an angular shader, first colour at the top.
+Shader? _rimSweep(List<Color> rim, Rect rect, double alpha) {
+  if (rim.length < 2 || rect.isEmpty) return null;
+  final a = alpha.clamp(0.0, 1.0).toDouble();
+  return SweepGradient(
+    colors: [
+      for (final color in rim) color.withValues(alpha: a),
+      rim.first.withValues(alpha: a),
+    ],
+    transform: const GradientRotation(-math.pi / 2),
+  ).createShader(rect);
+}
+
+Color _rimAverage(List<Color> rim, Color fallback) {
+  if (rim.isEmpty) return fallback;
+  var r = 0;
+  var g = 0;
+  var b = 0;
+  for (final color in rim) {
+    r += (color.r * 255).round();
+    g += (color.g * 255).round();
+    b += (color.b * 255).round();
+  }
+  return Color.fromARGB(255, r ~/ rim.length, g ~/ rim.length, b ~/ rim.length);
 }

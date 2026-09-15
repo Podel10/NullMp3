@@ -695,6 +695,8 @@ class PlayerController extends ChangeNotifier {
     return palette.dominantColor?.color;
   }
 
+  Future<void> refreshArtwork() => _extractColor();
+
   Future<void> _applyEqualizer() async {
     final eq = _equalizer;
     if (eq == null) return;

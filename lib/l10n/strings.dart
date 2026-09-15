@@ -204,6 +204,82 @@ class S {
 
   String get lyrics => _t('Lyrics', 'Текст песни', '歌词');
   String get lyricsNotFound => _t('Lyrics not found', 'Текст не найден', '未找到歌词');
+  String get lyricsNotFoundHint => _t(
+        'Search online or paste the lyrics here. Nothing is written into the original file.',
+        'Найдите текст в сети или вставьте его сюда. В исходный файл ничего не пишется.',
+        '可在线搜索或在此粘贴歌词。不会写入原始文件。',
+      );
+  String get lyricsSearchOnline => _t('Search online', 'Найти в сети', '在线搜索');
+  String get lyricsWrite => _t('Write lyrics', 'Написать текст', '填写歌词');
+  String get lyricsHint => _t(
+        'Paste lyrics. Lines like [00:12.00]Hello become karaoke timing.',
+        'Вставьте текст. Строки вида [00:12.00]Привет станут караоке.',
+        '粘贴歌词。形如 [00:12.00]你好 的行会变成逐句同步。',
+      );
+  String get lyricsSearching => _t('Looking for lyrics…', 'Ищем текст…', '正在查找歌词…');
+  String get lyricsSearchFailed => _t('Could not find lyrics', 'Не удалось найти текст', '未找到歌词');
+  String get lyricsSearchHint => _t(
+        'Type the original artist and title. Mixes and SoundCloud rips rarely have their own lyrics.',
+        'Введите оригинального исполнителя и название. У миксов и рипов со SoundCloud своего текста обычно нет.',
+        '请输入原曲艺人和歌名。混音和 SoundCloud 转存通常没有独立歌词。',
+      );
+  String get lyricsFilterDuration => _t('Similar length', 'Похожая длина', '时长接近');
+  String get lyricsFilterArtist => _t('Same artist', 'Тот же исполнитель', '相同艺人');
+  String get lyricsFilterSynced => _t('Timed lines', 'С таймингом', '逐句同步');
+  String get lyricsPickResult => _t('Pick the right lyrics', 'Выберите нужный текст', '选择正确歌词');
+  String lyricsHitMeta(String artist, String duration, String source) =>
+      '$artist • $duration • $source';
+  String get lyricsOffline => _t('No internet connection', 'Нет интернета', '没有网络');
+  String get lyricsOfflineHint => _t(
+        'Connect to the internet to search, or paste the lyrics yourself.',
+        'Подключитесь к сети, чтобы искать, или вставьте текст сами.',
+        '请联网后搜索，或自行粘贴歌词。',
+      );
+  String get editLyrics => _t('Edit lyrics', 'Править текст', '编辑歌词');
+  String get clearLyrics => _t('Clear', 'Очистить', '清除');
+  String get instrumental => _t('Instrumental', 'Инструментал', '纯音乐');
+  String get autoStyle => _t('Auto style', 'Автостиль', '自动封面');
+  String get coverSearchHint => _t(
+        'Search the pictures people use for this track on YouTube, iTunes, and Deezer.',
+        'Ищем обложки, которые ставят на этот трек на YouTube, iTunes и Deezer.',
+        '搜索 YouTube、iTunes、Deezer 上这首歌常用的封面。',
+      );
+  String get coverSearchSources => _t(
+        'YouTube thumbnails plus catalog artwork. Saved locally, not into the file.',
+        'Превью с YouTube и обложки из каталогов. Сохраняется локально, не в файл.',
+        '来自 YouTube 缩略图和曲库封面。仅保存在本地，不写入文件。',
+      );
+  String get searchImage => _t('Search image', 'Поиск картинки', '搜索图片');
+  String get searchGif => _t('Search GIF', 'Поиск GIF', '搜索 GIF');
+  String get imageSearchHint => _t(
+        'Search the web for any picture for this track.',
+        'Ищем в интернете любую картинку для этого трека.',
+        '在网络上搜索这首歌的任意图片。',
+      );
+  String get imageSearchSources => _t(
+        'Web image search. Saved locally, not into the file.',
+        'Поиск картинок в интернете. Сохраняется локально, не в файл.',
+        '网络图片搜索。仅保存在本地，不写入文件。',
+      );
+  String get gifSearchHint => _t(
+        'Search the web for an animated cover.',
+        'Ищем анимированную обложку в интернете.',
+        '在网络上搜索动态封面。',
+      );
+  String get gifSearchSources => _t(
+        'Animated GIFs, kept as motion. Saved locally, not into the file.',
+        'Анимированные GIF, движение сохраняется. Сохраняется локально, не в файл.',
+        '动态 GIF，保留动画。仅保存在本地，不写入文件。',
+      );
+  String get coverSearchFailed => _t('No covers found', 'Обложки не найдены', '未找到封面');
+  String get coverSearchApplyFailed => _t('Could not save this cover', 'Не удалось сохранить обложку', '无法保存封面');
+  String get cropCover => _t('Crop cover', 'Обрезать обложку', '裁剪封面');
+  String get cropCoverHint => _t(
+        'Drag a square. Only the selected part stays on the cover.',
+        'Выдели квадрат — на обложке останется только эта область.',
+        '拖出一个正方形，封面只保留选中的部分。',
+      );
+  String get coverApplied => _t('Cover updated', 'Обложка обновлена', '封面已更新');
   String get addToPlaylist => _t('Add to playlist', 'Добавить в плейлист', '添加到播放列表');
   String get addToPlaylistEllipsis => _t('Add to playlist…', 'Добавить в плейлист…', '添加到播放列表…');
   String get tagEditor => _t('Display settings', 'Настройка отображения', '显示设置');
@@ -233,9 +309,16 @@ class S {
   String get cutFailed => _t('Could not save the cut', 'Не удалось сохранить обрезанный файл', '无法保存剪辑');
   String get drivingMode => _t('Driving mode', 'Режим «За рулём»', '驾驶模式');
   String get lockScreen => _t('Lock screen', 'Экран блокировки', '锁屏播放');
+  String get lockedHint => _t(
+        'Hold to unlock',
+        'Удерживайте, чтобы разблокировать',
+        '长按解锁',
+      );
+  String get lockNow => _t('Lock', 'Заблокировать', '锁定');
   String get hide => _t('Hide', 'Скрыть', '隐藏');
   String get deleteFromDevice => _t('Delete from device', 'Удалить с устройства', '从设备删除');
   String get share => _t('Share', 'Поделиться', '分享');
+  String get preparingShare => _t('Preparing file…', 'Готовим файл…', '正在准备文件…');
   String get removeFromPlaylist => _t('Remove from playlist', 'Убрать из плейлиста', '从播放列表移除');
   String get playPauseFade => _t('Play/Pause fade', 'Играть/Пауза', '播放/暂停淡化');
   String get milliseconds300 => _t('300 milliseconds', '300 миллисекунд', '300 毫秒');

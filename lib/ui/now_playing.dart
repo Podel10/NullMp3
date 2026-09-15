@@ -49,7 +49,16 @@ class NowPlayingScreen extends StatelessWidget {
       child: AnnotatedRegion<SystemUiOverlayStyle>(
         value: dark ? SystemUiOverlayStyle.light : SystemUiOverlayStyle.dark,
         child: SafeArea(
-          child: Column(
+          child: BeatHalo(
+            key: ValueKey('halo-${track.path}-${track.coverShape.name}'),
+            enabled: settings.beatHalo,
+            playing: player.playing,
+            circle: track.isCircleCover,
+            color: haloColor,
+            artworkPath: track.path,
+            sessionId: player.player.androidAudioSessionId,
+            sessionIds: player.player.androidAudioSessionIdStream,
+            child: Column(
             children: [
               Padding(
                 padding: const EdgeInsets.fromLTRB(4, 0, 4, 8),
@@ -97,21 +106,16 @@ class NowPlayingScreen extends StatelessWidget {
                         child: SizedBox(
                           width: side,
                           height: side,
-                          child: BeatHalo(
-                            enabled: settings.beatHalo,
-                            playing: player.playing,
-                            circle: track.isCircleCover,
-                            color: haloColor,
-                            sessionId: player.player.androidAudioSessionId,
-                            sessionIds: player.player.androidAudioSessionIdStream,
+                          child: BeatHaloCover(
                             child: CoverArt(
+                              key: ValueKey('art-${track.path}-${track.coverShape.name}'),
                               track: track,
                               radius: 10,
                               expand: true,
                               muted: true,
                               loadArtwork: true,
                               animate: true,
-                              softEdge: settings.beatHalo,
+                              softEdge: settings.beatHalo && track.isCircleCover,
                               heroTag: 'now-art',
                             ),
                           ),
@@ -207,6 +211,7 @@ class NowPlayingScreen extends StatelessWidget {
               const SizedBox(height: 52),
             ],
           ),
+          ),
         ),
       ),
     );
@@ -247,6 +252,7 @@ class _ArtworkAtmosphere extends StatelessWidget {
         final bytes = snapshot.data;
         return Stack(
           fit: StackFit.expand,
+          clipBehavior: Clip.none,
           children: [
             ColoredBox(color: tint),
             if (bytes != null && bytes.isNotEmpty && !isVideoBytes(bytes) && !isAnimatedCover(bytes))

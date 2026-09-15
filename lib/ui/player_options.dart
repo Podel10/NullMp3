@@ -2,6 +2,9 @@ import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import 'package:share_plus/share_plus.dart';
 
+import '../data/artwork.dart';
+import '../data/cover_search.dart';
+import '../data/share_export.dart';
 import '../l10n/strings.dart';
 import '../models/models.dart';
 import '../state/library.dart';
@@ -11,6 +14,8 @@ import 'driving_mode.dart';
 import 'equalizer.dart';
 import 'lock_player.dart';
 import 'lyrics_page.dart';
+import 'music_editor.dart';
+import 'cover_search.dart';
 import 'settings.dart';
 import 'speed_sheet.dart';
 import 'tag_editor.dart';
@@ -130,13 +135,39 @@ class PlayerOptionsSheet extends StatelessWidget {
                 ),
                 _GridAction(
                   icon: Icons.content_cut_rounded,
-                  label: s.ringtoneEditor,
-                  onTap: () => _showRingtonePlaceholder(context),
+                  label: s.musicEditor,
+                  onTap: () => _open(context, MusicEditorScreen(track: track)),
                 ),
                 _GridAction(
                   icon: Icons.drive_eta_outlined,
                   label: s.drivingMode,
                   onTap: () => _open(context, const DrivingModeScreen(), playTrack: true),
+                ),
+                _GridAction(
+                  icon: Icons.share_outlined,
+                  label: s.share,
+                  onTap: () => _share(context),
+                ),
+                _GridAction(
+                  icon: Icons.auto_awesome_rounded,
+                  label: s.autoStyle,
+                  onTap: () => _open(context, CoverSearchScreen(track: track)),
+                ),
+                _GridAction(
+                  icon: Icons.gif_box_outlined,
+                  label: s.searchGif,
+                  onTap: () => _open(
+                    context,
+                    CoverSearchScreen(track: track, kind: CoverSearchKind.gif),
+                  ),
+                ),
+                _GridAction(
+                  icon: Icons.image_search_rounded,
+                  label: s.searchImage,
+                  onTap: () => _open(
+                    context,
+                    CoverSearchScreen(track: track, kind: CoverSearchKind.image),
+                  ),
                 ),
                 _GridAction(
                   icon: Icons.phonelink_lock_rounded,
@@ -157,11 +188,6 @@ class PlayerOptionsSheet extends StatelessWidget {
                   icon: Icons.delete_outline_rounded,
                   label: s.deleteFromDevice,
                   onTap: () => _delete(context, library, player, settings),
-                ),
-                _GridAction(
-                  icon: Icons.share_outlined,
-                  label: s.share,
-                  onTap: () => _share(context),
                 ),
                 if (playlist != null)
                   _GridAction(
@@ -242,14 +268,6 @@ class PlayerOptionsSheet extends StatelessWidget {
     await Navigator.of(host).push(MaterialPageRoute<void>(builder: (_) => page));
   }
 
-  void _showRingtonePlaceholder(BuildContext sheetContext) {
-    Navigator.pop(sheetContext);
-    if (!host.mounted) return;
-    ScaffoldMessenger.of(host).showSnackBar(
-      SnackBar(content: Text(host.s.ringtoneLater)),
-    );
-  }
-
   Future<void> _hide(BuildContext sheetContext, LibraryController library, PlayerController player) async {
     final s = sheetContext.s;
     final confirmed = await showDialog<bool>(
@@ -308,14 +326,48 @@ class PlayerOptionsSheet extends StatelessWidget {
 
   Future<void> _share(BuildContext sheetContext) async {
     Navigator.pop(sheetContext);
+    if (!host.mounted) return;
+    var preparing = true;
+    showDialog<void>(
+      context: host,
+      barrierDismissible: false,
+      builder: (context) => AlertDialog(
+        content: Row(
+          children: [
+            const SizedBox(
+              width: 22,
+              height: 22,
+              child: CircularProgressIndicator(strokeWidth: 2.4),
+            ),
+            const SizedBox(width: 16),
+            Expanded(child: Text(host.s.preparingShare)),
+          ],
+        ),
+      ),
+    );
     try {
+      final cover = await ArtworkStore.instance.get(track.path);
+      final path = await exportTrackForShare(track: track, cover: cover);
+      if (host.mounted && preparing) {
+        Navigator.of(host, rootNavigator: true).pop();
+        preparing = false;
+      }
       await SharePlus.instance.share(
         ShareParams(
-          files: [XFile(track.path)],
+          files: [
+            XFile(
+              path,
+              mimeType: shareAudioMime(path),
+            ),
+          ],
           text: '${track.artist} — ${track.title}',
         ),
       );
     } catch (error) {
+      if (host.mounted && preparing) {
+        Navigator.of(host, rootNavigator: true).pop();
+        preparing = false;
+      }
       if (!host.mounted) return;
       ScaffoldMessenger.of(host).showSnackBar(
         SnackBar(content: Text(host.s.shareFailed('$error'))),

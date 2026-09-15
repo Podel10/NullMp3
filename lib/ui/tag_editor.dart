@@ -8,7 +8,9 @@ import '../data/cover_image.dart';
 import '../l10n/strings.dart';
 import '../models/models.dart';
 import '../state/settings.dart';
+import 'cover_crop.dart';
 import 'cover_media.dart';
+import 'cover_search.dart';
 import 'widgets.dart';
 
 Future<void> showTagEditor(BuildContext context, Track track) {
@@ -83,12 +85,16 @@ class _TagEditorSheetState extends State<TagEditorSheet> {
         setState(() => _picking = false);
         return;
       }
-      final cover = await downscaleCover(picked);
+      if (!mounted) return;
+      setState(() => _picking = false);
+      final cropped = await showCoverCrop(context, picked);
+      if (!mounted) return;
+      if (cropped == null || cropped.isEmpty) return;
+      final cover = await downscaleCover(cropped);
       if (!mounted) return;
       setState(() {
         _cover = cover;
         _coverChanged = true;
-        _picking = false;
       });
     } catch (_) {
       if (!mounted) return;
@@ -97,6 +103,44 @@ class _TagEditorSheetState extends State<TagEditorSheet> {
         _error = context.s.pickCoverFailed;
       });
     }
+  }
+
+  Future<void> _autoCover() async {
+    if (_picking) return;
+    setState(() {
+      _picking = true;
+      _error = null;
+    });
+    try {
+      final picked = await showCoverSearch(context, widget.track);
+      if (!mounted) return;
+      setState(() {
+        _picking = false;
+        if (picked != null && picked.isNotEmpty) {
+          _cover = picked;
+          _coverChanged = true;
+        }
+      });
+    } catch (_) {
+      if (!mounted) return;
+      setState(() {
+        _picking = false;
+        _error = context.s.coverSearchFailed;
+      });
+    }
+  }
+
+  Future<void> _cropCurrentCover() async {
+    final current = _cover;
+    if (current == null || isAnimatedCover(current) || _picking) return;
+    final cropped = await showCoverCrop(context, current);
+    if (!mounted || cropped == null || cropped.isEmpty) return;
+    final cover = await downscaleCover(cropped);
+    if (!mounted) return;
+    setState(() {
+      _cover = cover;
+      _coverChanged = true;
+    });
   }
 
   void _setCoverShape(CoverShape shape) {
@@ -250,10 +294,26 @@ class _TagEditorSheetState extends State<TagEditorSheet> {
                   ),
                   Align(
                     alignment: Alignment.centerLeft,
-                    child: TextButton.icon(
-                      onPressed: _picking ? null : _pickCover,
-                      icon: const Icon(Icons.gif_box_outlined, size: 18),
-                      label: Text('${s.changeCover} · ${s.changeCoverHint}'),
+                    child: Wrap(
+                      spacing: 8,
+                      children: [
+                        TextButton.icon(
+                          onPressed: _picking ? null : _pickCover,
+                          icon: const Icon(Icons.gif_box_outlined, size: 18),
+                          label: Text('${s.changeCover} · ${s.changeCoverHint}'),
+                        ),
+                        TextButton.icon(
+                          onPressed: _picking ? null : _autoCover,
+                          icon: const Icon(Icons.auto_awesome_rounded, size: 18),
+                          label: Text(s.autoStyle),
+                        ),
+                        if (_cover != null && !isAnimatedCover(_cover!))
+                          TextButton.icon(
+                            onPressed: _picking ? null : _cropCurrentCover,
+                            icon: const Icon(Icons.crop_rounded, size: 18),
+                            label: Text(s.cropCover),
+                          ),
+                      ],
                     ),
                   ),
                   if (_error != null)

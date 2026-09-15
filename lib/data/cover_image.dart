@@ -1,4 +1,5 @@
 import 'dart:io';
+import 'dart:math' as math;
 import 'dart:ui' as ui;
 
 import 'package:file_picker/file_picker.dart';
@@ -210,5 +211,153 @@ Future<Uint8List> downscaleCover(Uint8List bytes, {int maxSide = 512}) async {
     return data.buffer.asUint8List();
   } catch (_) {
     return bytes;
+  }
+}
+
+/// Still JPEG/PNG for ID3. GIF/WebP/video become the first frame so the MP3 stays playable.
+Future<Uint8List?> flattenCoverForEmbed(Uint8List bytes, {int maxSide = 512}) async {
+  try {
+    final still = !isAnimatedCover(bytes);
+    final mime = mimeOfImage(bytes);
+    if (still && (mime == 'image/jpeg' || mime == 'image/png') && bytes.lengthInBytes <= 280 * 1024) {
+      return bytes;
+    }
+    final codec = await ui.instantiateImageCodec(bytes, targetWidth: maxSide);
+    final frame = await codec.getNextFrame();
+    final image = frame.image;
+    final data = await image.toByteData(format: ui.ImageByteFormat.png);
+    image.dispose();
+    if (data == null) return still ? bytes : null;
+    return data.buffer.asUint8List();
+  } catch (_) {
+    return isAnimatedCover(bytes) ? null : bytes;
+  }
+}
+
+class CoverCropSource {
+  const CoverCropSource({
+    required this.size,
+    required this.suggested,
+  });
+
+  final Size size;
+  final Rect suggested;
+}
+
+Future<CoverCropSource?> inspectCoverForCrop(Uint8List bytes) async {
+  if (isAnimatedCover(bytes)) return null;
+  try {
+    final codec = await ui.instantiateImageCodec(bytes);
+    final frame = await codec.getNextFrame();
+    final image = frame.image;
+    try {
+      final size = Size(image.width.toDouble(), image.height.toDouble());
+      if (size.width < 8 || size.height < 8) return null;
+      var bounds = Offset.zero & size;
+      if (image.width * image.height <= 4 * 1024 * 1024) {
+        final pixels = await image.toByteData(format: ui.ImageByteFormat.rawRgba);
+        if (pixels != null) {
+          bounds = _letterboxBounds(pixels.buffer.asUint8List(), image.width, image.height) ?? bounds;
+        }
+      }
+      return CoverCropSource(size: size, suggested: _largestSquare(bounds, size));
+    } finally {
+      image.dispose();
+    }
+  } catch (_) {
+    return null;
+  }
+}
+
+Rect _largestSquare(Rect bounds, Size image) {
+  final side = math.min(bounds.width, bounds.height).clamp(1.0, math.min(image.width, image.height)).toDouble();
+  final left = (bounds.left + (bounds.width - side) / 2).clamp(0.0, math.max(0.0, image.width - side)).toDouble();
+  final top = (bounds.top + (bounds.height - side) / 2).clamp(0.0, math.max(0.0, image.height - side)).toDouble();
+  return Rect.fromLTWH(left, top, side, side);
+}
+
+Rect? _letterboxBounds(Uint8List rgba, int width, int height) {
+  bool dark(int x, int y) {
+    final i = (y * width + x) * 4;
+    return rgba[i] < 14 && rgba[i + 1] < 14 && rgba[i + 2] < 14;
+  }
+
+  bool rowDark(int y) {
+    var darkCount = 0;
+    var samples = 0;
+    for (var x = 0; x < width; x += 4) {
+      samples++;
+      if (dark(x, y)) darkCount++;
+    }
+    return samples > 0 && darkCount / samples >= 0.92;
+  }
+
+  bool colDark(int x) {
+    var darkCount = 0;
+    var samples = 0;
+    for (var y = 0; y < height; y += 4) {
+      samples++;
+      if (dark(x, y)) darkCount++;
+    }
+    return samples > 0 && darkCount / samples >= 0.92;
+  }
+
+  var top = 0;
+  var bottom = height - 1;
+  var left = 0;
+  var right = width - 1;
+  while (top < bottom && rowDark(top)) {
+    top++;
+  }
+  while (bottom > top && rowDark(bottom)) {
+    bottom--;
+  }
+  while (left < right && colDark(left)) {
+    left++;
+  }
+  while (right > left && colDark(right)) {
+    right--;
+  }
+  final bounds = Rect.fromLTRB(left.toDouble(), top.toDouble(), (right + 1).toDouble(), (bottom + 1).toDouble());
+  if (bounds.width < width * 0.4 || bounds.height < height * 0.4) return null;
+  return bounds;
+}
+
+/// Cuts a square out of still artwork. Animated covers are left unchanged.
+Future<Uint8List?> cropCoverSquare(Uint8List bytes, Rect source) async {
+  if (isAnimatedCover(bytes)) return bytes;
+  try {
+    final codec = await ui.instantiateImageCodec(bytes);
+    final frame = await codec.getNextFrame();
+    final image = frame.image;
+    try {
+      final width = image.width.toDouble();
+      final height = image.height.toDouble();
+      if (width < 2 || height < 2) return bytes;
+      final maxSide = math.min(width, height);
+      var side = source.width.abs().clamp(1.0, maxSide).toDouble();
+      side = math.max(side, math.min(32.0, maxSide));
+      final left = source.left.clamp(0.0, width - side).toDouble();
+      final top = source.top.clamp(0.0, height - side).toDouble();
+      final outSide = math.min(900, math.max(side.round(), 64));
+      final recorder = ui.PictureRecorder();
+      final canvas = Canvas(recorder);
+      canvas.drawImageRect(
+        image,
+        Rect.fromLTWH(left, top, side, side),
+        Rect.fromLTWH(0, 0, outSide.toDouble(), outSide.toDouble()),
+        Paint()..filterQuality = FilterQuality.high,
+      );
+      final picture = recorder.endRecording();
+      final out = await picture.toImage(outSide, outSide);
+      picture.dispose();
+      final data = await out.toByteData(format: ui.ImageByteFormat.png);
+      out.dispose();
+      return data?.buffer.asUint8List();
+    } finally {
+      image.dispose();
+    }
+  } catch (_) {
+    return null;
   }
 }
