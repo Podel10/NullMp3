@@ -224,9 +224,13 @@ class NowPlayingScreen extends StatelessWidget {
 Color _haloFromArtwork(Color? source, Color fallback) {
   final base = source ?? fallback;
   final hsl = HSLColor.fromColor(base);
+  final chroma = (base.r - base.g).abs() + (base.g - base.b).abs() + (base.b - base.r).abs();
+  if (hsl.lightness < 0.08 || chroma < 0.12) {
+    return const Color(0xFF8A9096);
+  }
   return hsl
-      .withSaturation((hsl.saturation * 1.2).clamp(0.38, 0.95))
-      .withLightness(hsl.lightness.clamp(0.48, 0.72))
+      .withSaturation((hsl.saturation * 1.08).clamp(0.0, 0.88).toDouble())
+      .withLightness((hsl.lightness * 0.42 + 0.4).clamp(0.36, 0.74).toDouble())
       .toColor();
 }
 

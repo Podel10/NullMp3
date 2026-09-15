@@ -219,21 +219,27 @@ class _BeatHaloState extends State<BeatHalo> with SingleTickerProviderStateMixin
       _live = true;
       for (var i = 0; i < _peaks.length; i++) {
         final target = next[i % next.length];
-        final t = target > _peaks[i] ? 0.55 : 0.32;
+        final t = target > _peaks[i] ? 0.68 : 0.26;
         _peaks[i] = lerpDouble(_peaks[i], target, t)!;
       }
-      _energy = _follow(_energy, energy.clamp(0.0, 1.0), up: 0.48, down: 0.2);
-      _bass = _follow(_bass, bass.clamp(0.0, 1.0), up: 0.5, down: 0.18);
+      _energy = _follow(_energy, _gain(energy, 0.72), up: 0.6, down: 0.16);
+      _bass = _follow(_bass, _gain(bass, 0.5), up: 0.72, down: 0.12);
       if (beat) {
-        _pulse = math.max(_pulse, 0.55 + 0.45 * strength);
+        _pulse = math.max(_pulse, 0.62 + 0.38 * strength);
       } else if (strength > _pulse) {
-        _pulse = lerpDouble(_pulse, strength, 0.22)!;
+        _pulse = lerpDouble(_pulse, strength, 0.3)!;
       }
     });
   }
 
   double _follow(double current, double next, {double up = 0.7, double down = 0.22}) {
     return lerpDouble(current, next, next > current ? up : down)!;
+  }
+
+  /// Lifts quiet and mid levels so the halo reacts to more than just peaks.
+  double _gain(double value, double curve) {
+    final clamped = value.clamp(0.0, 1.0).toDouble();
+    return math.pow(clamped, curve).toDouble();
   }
 
   void _measureCover() {
@@ -379,10 +385,10 @@ class _EdgeBlendPainter extends CustomPainter {
 
   @override
   void paint(Canvas canvas, Size size) {
-    final drive = (0.2 + 0.5 * bass + 0.55 * pulse).clamp(0.0, 1.0).toDouble();
+    final drive = (0.1 + 0.46 * bass + 0.36 * pulse).clamp(0.0, 1.0).toDouble();
     final rect = Offset.zero & size;
-    final a0 = ((playing ? 0.14 : 0.04) + drive * 0.16).clamp(0.0, 1.0).toDouble();
-    final a1 = ((playing ? 0.4 : 0.08) + drive * 0.2).clamp(0.0, 1.0).toDouble();
+    final a0 = ((playing ? 0.08 : 0.03) + drive * 0.1).clamp(0.0, 1.0).toDouble();
+    final a1 = ((playing ? 0.22 : 0.05) + drive * 0.14).clamp(0.0, 1.0).toDouble();
     final sweep = _rimSweep(rim, rect, 1);
     if (sweep == null) {
       canvas.drawOval(
@@ -456,74 +462,45 @@ class _HaloPainter extends CustomPainter {
 
   @override
   void paint(Canvas canvas, Size size) {
-    if (peaks.isEmpty || cover.width <= 4 || cover.height <= 4) return;
+    if (cover.width <= 4 || cover.height <= 4) return;
     final bounds = cover;
     final screen = Offset.zero & size;
-    final hole = _outline(bounds, -8);
+    final drive = (0.1 + 0.46 * bass + 0.36 * pulse).clamp(0.0, 1.0).toDouble();
+    final expand = 9 + bass * 16 + pulse * 10 + energy * 5;
+    final hole = _outline(bounds, -1);
     final smooth = _smooth(peaks);
-    final outer = _plasmaOutline(bounds, smooth);
-    final band = Path.combine(PathOperation.difference, outer, hole);
-    final drive = (0.2 + 0.5 * bass + 0.55 * pulse).clamp(0.0, 1.0).toDouble();
-    final reach = bounds.shortestSide * (2.05 + drive * 0.65);
+    final outer = _haloRing(bounds, expand, smooth);
+    final band = Path.combine(PathOperation.difference, outer, _outline(bounds, 1.5));
     final wash = _rimAverage(rim, color);
-    final sweepRect = Rect.fromCircle(center: bounds.center, radius: reach);
-
-    canvas.drawRect(
-      screen,
-      Paint()
-        ..shader = RadialGradient(
-          colors: [
-            wash.withValues(alpha: (playing ? 0.2 : 0.05) + drive * 0.28),
-            wash.withValues(alpha: (playing ? 0.1 : 0.03) + drive * 0.16),
-            wash.withValues(alpha: (playing ? 0.04 : 0.01) + drive * 0.06),
-            wash.withValues(alpha: 0),
-          ],
-          stops: const [0.18, 0.42, 0.7, 1.0],
-        ).createShader(Rect.fromCircle(center: bounds.center, radius: reach)),
-    );
+    final sweepRect = bounds.inflate(expand + 18);
 
     canvas.save();
     canvas.clipPath(
       Path.combine(PathOperation.difference, Path()..addRect(screen), hole),
     );
 
-    final bloom = playing ? 0.1 + drive * 0.42 : 0.04;
     canvas.drawPath(
-      band,
-      _haloPaint(sweepRect, bloom, const MaskFilter.blur(BlurStyle.normal, 42)),
+      _outline(bounds, expand * 1.05),
+      Paint()
+        ..color = wash.withValues(alpha: (playing ? 0.07 : 0.025) + drive * 0.1)
+        ..maskFilter = const MaskFilter.blur(BlurStyle.normal, 18),
     );
     canvas.drawPath(
       band,
-      _haloPaint(
-        sweepRect,
-        playing ? 0.14 + drive * 0.5 : 0.06,
-        const MaskFilter.blur(BlurStyle.normal, 18),
-      ),
+      _haloPaint(sweepRect, playing ? 0.08 + drive * 0.18 : 0.04, const MaskFilter.blur(BlurStyle.normal, 12)),
     );
-    if (circle) {
-      canvas.drawRect(
-        screen,
-        Paint()
-          ..shader = RadialGradient(
-            colors: [
-              wash.withValues(alpha: 0),
-              wash.withValues(alpha: 0),
-              wash.withValues(alpha: (playing ? 0.5 : 0.12) * drive),
-              wash.withValues(alpha: (playing ? 0.22 : 0.08) * drive),
-              wash.withValues(alpha: 0),
-            ],
-            stops: const [0.0, 0.62, 0.84, 0.94, 1.0],
-          ).createShader(bounds.inflate(bounds.shortestSide * 0.22)),
-      );
-    }
+    canvas.drawPath(
+      band,
+      _haloPaint(sweepRect, playing ? 0.16 + drive * 0.26 : 0.06, const MaskFilter.blur(BlurStyle.normal, 5.5)),
+    );
     canvas.drawPath(
       outer,
       _haloPaint(
         sweepRect,
-        playing ? 0.28 + drive * 0.55 : 0.1,
-        const MaskFilter.blur(BlurStyle.normal, 5),
+        playing ? 0.3 + drive * 0.34 : 0.1,
+        const MaskFilter.blur(BlurStyle.normal, 2.2),
         style: PaintingStyle.stroke,
-        strokeWidth: 2.4 + drive * 3.6,
+        strokeWidth: 1.5 + drive * 1.6,
       ),
     );
     canvas.restore();
@@ -551,41 +528,48 @@ class _HaloPainter extends CustomPainter {
   }
 
   List<double> _smooth(List<double> raw) {
+    if (raw.isEmpty) return raw;
     final n = raw.length;
     var cur = List<double>.from(raw);
-    for (var pass = 0; pass < 2; pass++) {
+    for (var pass = 0; pass < 4; pass++) {
       final next = List<double>.filled(n, 0);
       for (var i = 0; i < n; i++) {
-        next[i] = (cur[(i - 1 + n) % n] + cur[i] * 2 + cur[(i + 1) % n]) / 4;
+        next[i] = (cur[(i - 2 + n) % n] + cur[(i - 1 + n) % n] * 2 + cur[i] * 3 + cur[(i + 1) % n] * 2 + cur[(i + 2) % n]) / 9;
       }
       cur = next;
     }
     return cur;
   }
 
-  Path _plasmaOutline(Rect bounds, List<double> smooth) {
-    final n = 72;
-    final hit = pulse;
-    final amp = 11 + bass * 28 + hit * 24 + energy * 12;
+  Path _haloRing(Rect bounds, double extra, List<double> smooth) {
+    final n = 80;
+    final ripple = 2.0 + energy * 3.2 + pulse * 2.4;
     final points = <Offset>[];
     for (var i = 0; i < n; i++) {
       final t = i / n;
-      final sample = _sample(bounds, t);
-      final band = _sampleBand(smooth, t);
-      final neighbor = _sampleBand(smooth, (t + 0.07) % 1);
-      final local = 0.16 + 0.84 * (0.72 * band + 0.28 * neighbor);
-      final radius = 5 + amp * local;
-      points.add(sample.point + sample.normal * radius);
+      final sample = _sample(bounds, t, extra: extra);
+      final band = smooth.isEmpty ? 0.45 : _sampleBand(smooth, t);
+      final neighbor = smooth.isEmpty ? 0.45 : _sampleBand(smooth, t + 0.1);
+      final local = 0.55 + 0.45 * (0.72 * band + 0.28 * neighbor);
+      points.add(sample.point + sample.normal * (ripple * local));
     }
     return _closedSpline(points);
   }
 
   double _sampleBand(List<double> smooth, double t) {
     final n = smooth.length;
-    final x = t * n;
+    final wrapped = t - t.floorToDouble();
+    // Mirror left/right and put bass at the bottom so kicks don't pile on the right.
+    final side = wrapped <= 0.5 ? wrapped : 1 - wrapped;
+    final x = ((1 - side * 2).clamp(0.0, 0.999).toDouble()) * n;
     final i = x.floor();
     final f = x - i;
     return lerpDouble(smooth[i % n], smooth[(i + 1) % n], f)!;
+  }
+
+  double _cornerRadius(Rect bounds, double extra) {
+    final box = bounds.inflate(extra);
+    return (10.0 + extra.abs() * 0.78).clamp(8.0, box.shortestSide / 2).toDouble();
   }
 
   Path _outline(Rect bounds, double extra) {
@@ -593,8 +577,9 @@ class _HaloPainter extends CustomPainter {
       return Path()
         ..addOval(Rect.fromCircle(center: bounds.center, radius: bounds.shortestSide / 2 + extra));
     }
+    final box = bounds.inflate(extra);
     return Path()
-      ..addRRect(RRect.fromRectAndRadius(bounds.inflate(extra), const Radius.circular(10)));
+      ..addRRect(RRect.fromRectAndRadius(box, Radius.circular(_cornerRadius(bounds, extra))));
   }
 
   Path _closedSpline(List<Offset> points) {
@@ -615,46 +600,47 @@ class _HaloPainter extends CustomPainter {
     return path;
   }
 
-  _Edge _sample(Rect bounds, double t) {
+  _Edge _sample(Rect bounds, double t, {double extra = 0}) {
     if (circle) {
       final a = t * math.pi * 2 - math.pi / 2;
       final dir = Offset(math.cos(a), math.sin(a));
-      return _Edge(bounds.center + dir * (bounds.shortestSide / 2), dir);
+      return _Edge(bounds.center + dir * (bounds.shortestSide / 2 + extra), dir);
     }
-    final r = 10.0;
-    final w = bounds.width - 2 * r;
-    final h = bounds.height - 2 * r;
+    final box = bounds.inflate(extra);
+    final r = _cornerRadius(bounds, extra);
+    final w = math.max(0.0, box.width - 2 * r);
+    final h = math.max(0.0, box.height - 2 * r);
     final total = 2 * w + 2 * h + 2 * math.pi * r;
     var d = (t % 1) * total;
-    if (d <= w) return _Edge(Offset(bounds.left + r + d, bounds.top), const Offset(0, -1));
+    if (d <= w) return _Edge(Offset(box.left + r + d, box.top), const Offset(0, -1));
     d -= w;
     if (d <= math.pi / 2 * r) {
       final a = -math.pi / 2 + d / r;
       final n = Offset(math.cos(a), math.sin(a));
-      return _Edge(Offset(bounds.right - r, bounds.top + r) + n * r, n);
+      return _Edge(Offset(box.right - r, box.top + r) + n * r, n);
     }
     d -= math.pi / 2 * r;
-    if (d <= h) return _Edge(Offset(bounds.right, bounds.top + r + d), const Offset(1, 0));
+    if (d <= h) return _Edge(Offset(box.right, box.top + r + d), const Offset(1, 0));
     d -= h;
     if (d <= math.pi / 2 * r) {
       final a = d / r;
       final n = Offset(math.cos(a), math.sin(a));
-      return _Edge(Offset(bounds.right - r, bounds.bottom - r) + n * r, n);
+      return _Edge(Offset(box.right - r, box.bottom - r) + n * r, n);
     }
     d -= math.pi / 2 * r;
-    if (d <= w) return _Edge(Offset(bounds.right - r - d, bounds.bottom), const Offset(0, 1));
+    if (d <= w) return _Edge(Offset(box.right - r - d, box.bottom), const Offset(0, 1));
     d -= w;
     if (d <= math.pi / 2 * r) {
       final a = math.pi / 2 + d / r;
       final n = Offset(math.cos(a), math.sin(a));
-      return _Edge(Offset(bounds.left + r, bounds.bottom - r) + n * r, n);
+      return _Edge(Offset(box.left + r, box.bottom - r) + n * r, n);
     }
     d -= math.pi / 2 * r;
-    if (d <= h) return _Edge(Offset(bounds.left, bounds.bottom - r - d), const Offset(-1, 0));
+    if (d <= h) return _Edge(Offset(box.left, box.bottom - r - d), const Offset(-1, 0));
     d -= h;
     final a = math.pi + d / r;
     final n = Offset(math.cos(a), math.sin(a));
-    return _Edge(Offset(bounds.left + r, bounds.top + r) + n * r, n);
+    return _Edge(Offset(box.left + r, box.top + r) + n * r, n);
   }
 
   @override
@@ -684,7 +670,7 @@ const _rimBands = 16;
 Future<List<Color>> _sampleCoverRim(Uint8List? bytes, {required bool circle}) async {
   if (bytes == null || bytes.length < 32) return const [];
   try {
-    final codec = await instantiateImageCodec(bytes, targetWidth: 48);
+    final codec = await instantiateImageCodec(bytes, targetWidth: 96);
     final frame = await codec.getNextFrame();
     final image = frame.image;
     try {
@@ -696,8 +682,7 @@ Future<List<Color>> _sampleCoverRim(Uint8List? bytes, {required bool circle}) as
       final pixels = data.buffer.asUint8List();
       final rim = <Color>[];
       for (var i = 0; i < _rimBands; i++) {
-        final point = _rimPoint(i / _rimBands, width.toDouble(), height.toDouble(), circle);
-        rim.add(_rimColorAt(pixels, width, height, point));
+        rim.add(_rimColorAlongRay(pixels, width, height, i / _rimBands, circle));
       }
       return rim;
     } finally {
@@ -709,7 +694,7 @@ Future<List<Color>> _sampleCoverRim(Uint8List? bytes, {required bool circle}) as
 }
 
 /// Angle `t` runs clockwise from the top, matching [_HaloPainter._sample].
-Offset _rimPoint(double t, double width, double height, bool circle) {
+Offset _rimPoint(double t, double width, double height, bool circle, [double inset = 0.82]) {
   final center = Offset(width / 2, height / 2);
   final angle = t * math.pi * 2 - math.pi / 2;
   final dir = Offset(math.cos(angle), math.sin(angle));
@@ -723,7 +708,22 @@ Offset _rimPoint(double t, double width, double height, bool circle) {
     final byY = dir.dy.abs() < 1e-4 ? double.infinity : halfH / dir.dy.abs();
     reach = math.min(byX, byY);
   }
-  return center + dir * reach * 0.88;
+  return center + dir * reach * inset;
+}
+
+Color _rimColorAlongRay(Uint8List rgba, int width, int height, double t, bool circle) {
+  Color? best;
+  var bestScore = -1.0;
+  for (final inset in const [0.9, 0.76, 0.6, 0.44, 0.28]) {
+    final sample = _rimColorAt(rgba, width, height, _rimPoint(t, width.toDouble(), height.toDouble(), circle, inset));
+    final score = _coverColorScore(sample);
+    if (score > bestScore) {
+      bestScore = score;
+      best = sample;
+    }
+    if (score >= 0.2) break;
+  }
+  return _haloTint(best ?? const Color(0xFF7A8086));
 }
 
 Color _rimColorAt(Uint8List rgba, int width, int height, Offset point) {
@@ -745,12 +745,33 @@ Color _rimColorAt(Uint8List rgba, int width, int height, Offset point) {
       count++;
     }
   }
-  if (count == 0) return const Color(0xFF1C3A48);
-  final base = Color.fromARGB(255, r ~/ count, g ~/ count, b ~/ count);
+  if (count == 0) return const Color(0xFF7A8086);
+  return Color.fromARGB(255, r ~/ count, g ~/ count, b ~/ count);
+}
+
+double _coverChroma(Color color) {
+  final maxC = math.max(color.r, math.max(color.g, color.b));
+  final minC = math.min(color.r, math.min(color.g, color.b));
+  return maxC - minC;
+}
+
+double _coverColorScore(Color color) {
+  final chroma = _coverChroma(color);
+  final light = HSLColor.fromColor(color).lightness;
+  if (light < 0.06 || light > 0.94 || chroma < 0.05) return chroma * 0.15;
+  return chroma * (1.0 - (light - 0.45).abs());
+}
+
+/// Keeps the cover hue only when the sample is a real colour. Near-black
+/// JPEG noise otherwise becomes a fake blue or purple once it is brightened.
+Color _haloTint(Color base) {
   final hsl = HSLColor.fromColor(base);
+  if (hsl.lightness < 0.07 || _coverChroma(base) < 0.06) {
+    return const Color(0xFF7A8086);
+  }
   return hsl
-      .withSaturation((hsl.saturation * 1.25).clamp(0.0, 0.95).toDouble())
-      .withLightness(hsl.lightness.clamp(0.4, 0.74).toDouble())
+      .withSaturation((hsl.saturation * 1.06).clamp(0.0, 0.86).toDouble())
+      .withLightness((hsl.lightness * 0.5 + 0.34).clamp(0.3, 0.76).toDouble())
       .toColor();
 }
 

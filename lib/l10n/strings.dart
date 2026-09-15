@@ -252,24 +252,24 @@ class S {
   String get searchImage => _t('Search image', 'Поиск картинки', '搜索图片');
   String get searchGif => _t('Search GIF', 'Поиск GIF', '搜索 GIF');
   String get imageSearchHint => _t(
-        'Search the web for any picture for this track.',
-        'Ищем в интернете любую картинку для этого трека.',
-        '在网络上搜索这首歌的任意图片。',
+        'Type anything — Pinterest, not the track.',
+        'Напишите что найти в Pinterest, не обязательно про трек.',
+        '随便输入，在 Pinterest 搜图，不必跟歌曲有关。',
       );
   String get imageSearchSources => _t(
-        'Web image search. Saved locally, not into the file.',
-        'Поиск картинок в интернете. Сохраняется локально, не в файл.',
-        '网络图片搜索。仅保存在本地，不写入文件。',
+        'Pinterest pictures. Saved locally, not into the file.',
+        'Картинки с Pinterest. Сохраняется локально, не в файл.',
+        '来自 Pinterest 的图片。仅保存在本地，不写入文件。',
       );
   String get gifSearchHint => _t(
-        'Search the web for an animated cover.',
-        'Ищем анимированную обложку в интернете.',
-        '在网络上搜索动态封面。',
+        'Type anything — GIFs from Tenor, Giphy, Bing, and Pinterest.',
+        'Напишите что найти: GIF с Tenor, Giphy, Bing и Pinterest.',
+        '随便输入，从 Tenor、Giphy、Bing、Pinterest 搜 GIF。',
       );
   String get gifSearchSources => _t(
-        'Animated GIFs, kept as motion. Saved locally, not into the file.',
-        'Анимированные GIF, движение сохраняется. Сохраняется локально, не в файл.',
-        '动态 GIF，保留动画。仅保存在本地，不写入文件。',
+        'Tenor, Giphy, Bing, and Pinterest. Motion is kept. Saved locally, not into the file.',
+        'Tenor, Giphy, Bing и Pinterest. Движение сохраняется. Сохраняется локально, не в файл.',
+        '来自 Tenor、Giphy、Bing 和 Pinterest。保留动画，仅保存在本地，不写入文件。',
       );
   String get coverSearchFailed => _t('No covers found', 'Обложки не найдены', '未找到封面');
   String get coverSearchApplyFailed => _t('Could not save this cover', 'Не удалось сохранить обложку', '无法保存封面');

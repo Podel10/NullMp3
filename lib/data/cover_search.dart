@@ -72,16 +72,28 @@ Future<List<CoverCandidate>> searchCoverCandidates(
   if (q.length < 2) return const [];
   final hits = switch (kind) {
     CoverSearchKind.art => await Future.wait([_itunes(q), _deezer(q), _youtube(q)]),
-    CoverSearchKind.gif => [await _webImages(q, gif: true)],
-    CoverSearchKind.image => [await _webImages(q, gif: false)],
+    CoverSearchKind.gif => await Future.wait([
+        _tenor(q),
+        _giphy(q),
+        _bingImages(q, gif: true),
+        _pinterest(q, gif: true),
+      ]),
+    CoverSearchKind.image => [await _pinterest(q, gif: false)],
   };
   final seen = <String>{};
   final out = <CoverCandidate>[];
-  for (final group in hits) {
-    for (final hit in group) {
+  var i = 0;
+  var more = true;
+  while (more) {
+    more = false;
+    for (final group in hits) {
+      if (i >= group.length) continue;
+      more = true;
+      final hit = group[i];
       final key = hit.fullUrl.split('?').first;
       if (seen.add(key)) out.add(hit);
     }
+    i++;
   }
   return out;
 }
@@ -168,23 +180,163 @@ List<CoverCandidate> _deezerCover(Map<String, dynamic> item) {
   ];
 }
 
-/// Plain web image search. The animated filter is the one the site uses
-/// itself, so GIF hits come back already narrowed down.
-Future<List<CoverCandidate>> _webImages(String query, {required bool gif}) async {
+/// Pinterest image search. Image/GIF covers are whatever the user typed,
+/// not a guess from the track title.
+Future<List<CoverCandidate>> _pinterest(String query, {required bool gif}) async {
+  try {
+    final q = gif && !RegExp(r'\bgifs?\b', caseSensitive: false).hasMatch(query) ? '$query gif' : query;
+    final payload = jsonEncode({
+      'options': {
+        'query': q,
+        'bookmarks': [''],
+        if (gif) 'mediaType': 'gif',
+      },
+      'context': {},
+    });
+    final data = await _getJson(
+      Uri.https('www.pinterest.com', '/resource/BaseSearchResource/get/', {'data': payload}),
+      referer: 'https://www.pinterest.com/',
+      accept: 'application/json, text/javascript, */*; q=0.01',
+      extraHeaders: const {
+        'X-Requested-With': 'XMLHttpRequest',
+        'X-Pinterest-AppState': 'active',
+        'X-Pinterest-Source-Url': '/ideas/',
+        'X-Pinterest-PWS-Handler': 'www/ideas.js',
+      },
+    );
+    if (data is! Map) return const [];
+    final resource = data['resource_response'];
+    if (resource is! Map) return const [];
+    final inner = resource['data'];
+    final results = inner is Map ? inner['results'] : null;
+    if (results is! List) return const [];
+    final limit = gif ? 16 : 24;
+    final out = <CoverCandidate>[];
+    for (final item in results) {
+      if (item is! Map) continue;
+      if ((item['type'] as String? ?? '') == 'story') continue;
+      final urls = _pinterestUrls(item['images']);
+      if (urls == null) continue;
+      final isGif = _looksLikeGif(urls.full);
+      if (gif && !isGif) continue;
+      if (!gif && isGif) continue;
+      final grid = (item['grid_title'] as String?)?.trim() ?? '';
+      final title = grid.isNotEmpty
+          ? grid
+          : ((item['title'] as String?) ?? (item['auto_alt_text'] as String?) ?? '').trim();
+      out.add(
+        CoverCandidate(
+          previewUrl: gif ? urls.full : urls.preview,
+          fullUrl: urls.full,
+          source: 'Pinterest',
+          label: title,
+        ),
+      );
+      if (out.length >= limit) break;
+    }
+    return out;
+  } catch (_) {
+    return const [];
+  }
+}
+
+({String preview, String full})? _pinterestUrls(Object? images) {
+  if (images is! Map) return null;
+  String? urlOf(String key) {
+    final size = images[key];
+    if (size is Map && size['url'] is String) {
+      final url = (size['url'] as String).trim();
+      if (url.isNotEmpty) return url;
+    }
+    return null;
+  }
+
+  final orig = urlOf('orig');
+  final mid = urlOf('736x') ?? urlOf('474x');
+  final thumb = urlOf('236x') ?? mid;
+  if (orig == null && mid == null && thumb == null) return null;
+  return (preview: thumb ?? mid ?? orig!, full: orig ?? mid ?? thumb!);
+}
+
+/// `.gifv` links are wrappers, not real GIF bytes, so they are skipped.
+bool _looksLikeGif(String url) {
+  final path = (Uri.tryParse(url)?.path ?? url).toLowerCase();
+  return path.endsWith('.gif');
+}
+
+Future<List<CoverCandidate>> _tenor(String query) async {
+  try {
+    final slug = query.trim().replaceAll(RegExp(r'\s+'), '-');
+    final body = await _getString(
+      Uri.https('tenor.com', '/search/$slug-gifs'),
+      accept: 'text/html,application/xhtml+xml,*/*;q=0.8',
+      referer: 'https://tenor.com/',
+    );
+    if (body == null || body.isEmpty) return const [];
+    final byName = <String, String>{};
+    for (final match in RegExp(r'https://media\.tenor\.com/[^"\\]+\.gif').allMatches(body)) {
+      final url = match.group(0)!;
+      final name = Uri.parse(url).pathSegments.last;
+      final previous = byName[name];
+      if (previous == null || previous.contains('AAAAM')) byName[name] = url;
+    }
+    return [
+      for (final entry in byName.entries.take(16))
+        CoverCandidate(
+          previewUrl: entry.value,
+          fullUrl: entry.value,
+          source: 'Tenor',
+          label: entry.key.replaceAll('.gif', '').replaceAll('-', ' '),
+        ),
+    ];
+  } catch (_) {
+    return const [];
+  }
+}
+
+Future<List<CoverCandidate>> _giphy(String query) async {
   try {
     final body = await _getString(
+      Uri.https('giphy.com', '/search/${query.trim()}'),
+      accept: 'text/html,application/xhtml+xml,*/*;q=0.8',
+      referer: 'https://giphy.com/',
+    );
+    if (body == null || body.isEmpty) return const [];
+    final ids = <String>{};
+    for (final match in RegExp(r'/media/(?:v1\.[^/]+/)?([A-Za-z0-9]+)/giphy\.gif').allMatches(body)) {
+      ids.add(match.group(1)!);
+      if (ids.length >= 16) break;
+    }
+    return [
+      for (final id in ids)
+        CoverCandidate(
+          previewUrl: 'https://media.giphy.com/media/$id/giphy-preview.gif',
+          fullUrl: 'https://media.giphy.com/media/$id/giphy-downsized.gif',
+          source: 'Giphy',
+          label: '',
+        ),
+    ];
+  } catch (_) {
+    return const [];
+  }
+}
+
+Future<List<CoverCandidate>> _bingImages(String query, {required bool gif}) async {
+  try {
+    final q = gif && !RegExp(r'\bgifs?\b', caseSensitive: false).hasMatch(query) ? '$query gif' : query;
+    final body = await _getString(
       Uri.https('www.bing.com', '/images/async', {
-        'q': query,
+        'q': q,
         'first': '1',
         'count': '32',
         'mmasync': '1',
         if (gif) 'qft': '+filterui:photo-animatedgif',
       }),
       accept: 'text/html,application/xhtml+xml,*/*;q=0.8',
-      referer: 'https://www.bing.com/images/search?q=${Uri.encodeQueryComponent(query)}',
+      referer: 'https://www.bing.com/images/search?q=${Uri.encodeQueryComponent(q)}',
     );
     if (body == null || body.isEmpty) return const [];
-    final limit = gif ? 12 : 24;
+    final limit = gif ? 16 : 24;
     final out = <CoverCandidate>[];
     for (final block in RegExp(r'm="(\{&quot;.*?\})"').allMatches(body)) {
       Map<String, dynamic> meta;
@@ -196,13 +348,13 @@ Future<List<CoverCandidate>> _webImages(String query, {required bool gif}) async
       final full = (meta['murl'] as String?)?.trim();
       if (full == null || full.isEmpty) continue;
       if (gif && !_looksLikeGif(full)) continue;
+      if (!gif && _looksLikeGif(full)) continue;
       final thumb = (meta['turl'] as String?)?.trim();
       out.add(
         CoverCandidate(
-          // GIFs preview the real file so the motion is visible before picking.
           previewUrl: gif || thumb == null || thumb.isEmpty ? full : thumb,
           fullUrl: full,
-          source: _hostLabel(meta['purl'] as String?) ?? (gif ? 'GIF' : 'Web'),
+          source: gif ? 'Bing' : (_hostLabel(meta['purl'] as String?) ?? 'Bing'),
           label: (meta['t'] as String?)?.trim() ?? '',
         ),
       );
@@ -212,12 +364,6 @@ Future<List<CoverCandidate>> _webImages(String query, {required bool gif}) async
   } catch (_) {
     return const [];
   }
-}
-
-/// `.gifv` links are wrappers, not real GIF bytes, so they are skipped.
-bool _looksLikeGif(String url) {
-  final path = (Uri.tryParse(url)?.path ?? url).toLowerCase();
-  return path.endsWith('.gif');
 }
 
 String _unescapeHtml(String value) => value
@@ -314,19 +460,34 @@ String? _videoIdFromUrl(String? url) {
   return null;
 }
 
-Future<Object?> _getJson(Uri uri, {String? referer}) async {
-  final body = await _getString(uri, referer: referer);
+Future<Object?> _getJson(
+  Uri uri, {
+  String? referer,
+  String? accept,
+  Map<String, String>? extraHeaders,
+}) async {
+  final body = await _getString(uri, referer: referer, accept: accept, extraHeaders: extraHeaders);
   if (body == null || body.isEmpty) return null;
   return jsonDecode(body);
 }
 
-Future<String?> _getString(Uri uri, {String? referer, String? accept}) async {
-  final bytes = await _getBytes(uri, referer: referer, accept: accept);
+Future<String?> _getString(
+  Uri uri, {
+  String? referer,
+  String? accept,
+  Map<String, String>? extraHeaders,
+}) async {
+  final bytes = await _getBytes(uri, referer: referer, accept: accept, extraHeaders: extraHeaders);
   if (bytes == null) return null;
   return utf8.decode(bytes, allowMalformed: true);
 }
 
-Future<Uint8List?> _getBytes(Uri uri, {String? referer, String? accept}) async {
+Future<Uint8List?> _getBytes(
+  Uri uri, {
+  String? referer,
+  String? accept,
+  Map<String, String>? extraHeaders,
+}) async {
   final client = HttpClient();
   try {
     client.userAgent = _kAgent;
@@ -343,7 +504,16 @@ Future<Uint8List?> _getBytes(Uri uri, {String? referer, String? accept}) async {
       request.headers.set(HttpHeaders.refererHeader, referer);
     } else if (host.contains('ytimg') || host.contains('youtube')) {
       request.headers.set(HttpHeaders.refererHeader, 'https://www.youtube.com/');
+    } else if (host.contains('pinimg') || host.contains('pinterest')) {
+      request.headers.set(HttpHeaders.refererHeader, 'https://www.pinterest.com/');
+    } else if (host.contains('tenor')) {
+      request.headers.set(HttpHeaders.refererHeader, 'https://tenor.com/');
+    } else if (host.contains('giphy')) {
+      request.headers.set(HttpHeaders.refererHeader, 'https://giphy.com/');
+    } else if (host.contains('bing')) {
+      request.headers.set(HttpHeaders.refererHeader, 'https://www.bing.com/');
     }
+    extraHeaders?.forEach(request.headers.set);
     final response = await request.close().timeout(const Duration(seconds: 12));
     if (response.statusCode < 200 || response.statusCode >= 300) return null;
     final builder = BytesBuilder(copy: false);

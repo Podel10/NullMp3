@@ -662,8 +662,9 @@ class PlayerController extends ChangeNotifier {
       notifyListeners();
       return;
     }
-    if (isAnimatedCover(bytes)) {
-      artworkColor = const Color(0xFF1C3A48);
+    // GIF and WebP decode to their first frame, so only video has no colour.
+    if (isVideoBytes(bytes)) {
+      artworkColor = const Color(0xFF5E656C);
       notifyListeners();
       return;
     }
@@ -680,6 +681,14 @@ class PlayerController extends ChangeNotifier {
   }
 
   Color? _pickArtworkColor(PaletteGenerator palette) {
+    bool usable(Color color) {
+      final luminance = color.computeLuminance();
+      if (luminance <= 0.045 || luminance >= 0.92) return false;
+      final maxC = math.max(color.r, math.max(color.g, color.b));
+      final minC = math.min(color.r, math.min(color.g, color.b));
+      return maxC - minC > 0.08;
+    }
+
     for (final color in [
       palette.dominantColor?.color,
       palette.vibrantColor?.color,
@@ -688,9 +697,7 @@ class PlayerController extends ChangeNotifier {
       palette.lightVibrantColor?.color,
       palette.lightMutedColor?.color,
     ]) {
-      if (color == null) continue;
-      final luminance = color.computeLuminance();
-      if (luminance > 0.03 && luminance < 0.94) return color;
+      if (color != null && usable(color)) return color;
     }
     return palette.dominantColor?.color;
   }

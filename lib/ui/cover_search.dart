@@ -39,15 +39,18 @@ class CoverSearchScreen extends StatefulWidget {
 class _CoverSearchScreenState extends State<CoverSearchScreen> {
   late final TextEditingController _query;
   List<CoverCandidate> _hits = [];
-  bool _busy = true;
+  late bool _busy;
   bool _applying = false;
   String? _error;
+
+  bool get _tiedToTrack => widget.kind == CoverSearchKind.art;
 
   @override
   void initState() {
     super.initState();
-    _query = TextEditingController(text: coverSearchQuery(widget.track));
-    unawaited(_search());
+    _query = TextEditingController(text: _tiedToTrack ? coverSearchQuery(widget.track) : '');
+    _busy = _tiedToTrack;
+    if (_tiedToTrack) unawaited(_search());
   }
 
   @override
@@ -72,7 +75,7 @@ class _CoverSearchScreenState extends State<CoverSearchScreen> {
       setState(() {
         _hits = hits;
         _busy = false;
-        if (hits.isEmpty) _error = failed;
+        if (hits.isEmpty && _query.text.trim().length >= 2) _error = failed;
       });
     } catch (_) {
       if (!mounted) return;
@@ -168,7 +171,10 @@ class _CoverSearchScreenState extends State<CoverSearchScreen> {
               child: Center(
                 child: Padding(
                   padding: const EdgeInsets.all(32),
-                  child: Text(_error ?? s.coverSearchFailed, textAlign: TextAlign.center),
+                  child: Text(
+                    _error ?? (_tiedToTrack ? s.coverSearchFailed : hint),
+                    textAlign: TextAlign.center,
+                  ),
                 ),
               ),
             )
