@@ -62,6 +62,10 @@ class _MusicEditorScreenState extends State<MusicEditorScreen> {
   }
 
   Future<void> _boot() async {
+    try {
+      final main = context.read<PlayerController>();
+      if (main.playing) await main.playPause();
+    } catch (_) {}
     _copyFuture = () async {
       try {
         final path = await materializeAudioFile(track.path);
@@ -194,11 +198,11 @@ class _MusicEditorScreenState extends State<MusicEditorScreen> {
       _saveWatchdog?.cancel();
       nav.pop();
       messenger.showSnackBar(SnackBar(content: Text(s.cutSaved(title))));
-    } catch (error) {
+    } catch (_) {
       _saveWatchdog?.cancel();
       if (!mounted) return;
       setState(() => _saving = false);
-      messenger.showSnackBar(SnackBar(content: Text(s.saveTagsFailed('$error'))));
+      messenger.showSnackBar(SnackBar(content: Text(s.cutFailed)));
     }
   }
 

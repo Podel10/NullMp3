@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:io';
 import 'dart:typed_data';
 
 import 'package:flutter/material.dart';
@@ -6,6 +7,7 @@ import 'package:flutter/material.dart';
 import '../data/artwork.dart';
 import '../data/cover_image.dart';
 import '../data/cover_search.dart';
+import '../data/network.dart';
 import '../l10n/strings.dart';
 import '../models/models.dart';
 import 'cover_crop.dart';
@@ -61,6 +63,13 @@ class _CoverSearchScreenState extends State<CoverSearchScreen> {
 
   Future<void> _search() async {
     final failed = context.s.coverSearchFailed;
+    if (NetworkGate.offline) {
+      setState(() {
+        _busy = false;
+        _error = context.s.lyricsOffline;
+      });
+      return;
+    }
     setState(() {
       _busy = true;
       _error = null;
@@ -77,11 +86,11 @@ class _CoverSearchScreenState extends State<CoverSearchScreen> {
         _busy = false;
         if (hits.isEmpty && _query.text.trim().length >= 2) _error = failed;
       });
-    } catch (_) {
+    } catch (error) {
       if (!mounted) return;
       setState(() {
         _busy = false;
-        _error = failed;
+        _error = error is SocketException || NetworkGate.offline ? context.s.lyricsOffline : failed;
       });
     }
   }

@@ -22,6 +22,7 @@ class ClipPreviewController extends ChangeNotifier {
   bool _ready = false;
   bool _alive = true;
   bool _stopping = false;
+  Size? _lastVideoSize;
   bool playing = false;
   int positionMs = 0;
   int startMs = 0;
@@ -62,17 +63,26 @@ class ClipPreviewController extends ChangeNotifier {
     _videoPath = path;
     _ready = false;
     playing = false;
+    final options = VideoPlayerOptions(mixWithOthers: true);
     final controller = path.startsWith('content:')
-        ? VideoPlayerController.contentUri(Uri.parse(path))
-        : VideoPlayerController.file(File(path));
+        ? VideoPlayerController.contentUri(Uri.parse(path), videoPlayerOptions: options)
+        : VideoPlayerController.file(File(path), videoPlayerOptions: options);
     try {
       await controller.initialize();
       await controller.setLooping(false);
-      await controller.seekTo(Duration(milliseconds: startMs));
+      controller.addListener(_onVideoTick);
       _video = controller;
       _ready = true;
-      controller.addListener(_onVideoTick);
+      _emit();
+      // Many Android surfaces stay black until the decoder actually runs.
+      try {
+        await controller.play();
+        await Future<void>.delayed(const Duration(milliseconds: 80));
+        await controller.pause();
+      } catch (_) {}
+      await controller.seekTo(Duration(milliseconds: startMs));
     } catch (_) {
+      controller.removeListener(_onVideoTick);
       await controller.dispose();
       _ready = false;
     }
@@ -117,10 +127,26 @@ class ClipPreviewController extends ChangeNotifier {
     _emit();
     _startTick();
     if (_video != null) {
-      await _video!.play();
+      try {
+        await _video!.play();
+      } catch (_) {
+        playing = false;
+        _tick?.cancel();
+        _emit();
+      }
       return;
     }
-    unawaited(_audio.play());
+    unawaited(
+      _audio.play().then<void>(
+        (_) {},
+        onError: (Object _, StackTrace _) {
+          if (!_alive || !playing) return;
+          playing = false;
+          _tick?.cancel();
+          _emit();
+        },
+      ),
+    );
   }
 
   Future<void> pause() async {
@@ -161,8 +187,16 @@ class ClipPreviewController extends ChangeNotifier {
   }
 
   void _onVideoTick() {
-    if (!playing || _video == null) return;
-    _onPos(_video!.value.position.inMilliseconds);
+    if (!_alive || _video == null) return;
+    final value = _video!.value;
+    if (!playing) {
+      if (value.size != _lastVideoSize) {
+        _lastVideoSize = value.size;
+        _emit();
+      }
+      return;
+    }
+    _onPos(value.position.inMilliseconds);
   }
 
   void _onPos(int ms) {
@@ -189,6 +223,7 @@ class ClipPreviewController extends ChangeNotifier {
     final old = _video;
     _video = null;
     _videoPath = null;
+    _lastVideoSize = null;
     if (old == null) return;
     old.removeListener(_onVideoTick);
     try {
@@ -256,37 +291,39 @@ class ClipPreviewButton extends StatelessWidget {
 }
 
 class ClipVideoView extends StatelessWidget {
-  const ClipVideoView({super.key, required this.controller, this.height = 220});
+  const ClipVideoView({super.key, required this.controller, this.aspectRatio, this.maxHeight = 280});
 
   final ClipPreviewController controller;
-  final double height;
+  final double? aspectRatio;
+  final double maxHeight;
 
   @override
   Widget build(BuildContext context) {
     final player = controller.video;
-    if (player == null || !player.value.isInitialized) {
-      return SizedBox(
-        height: height,
-        child: DecoratedBox(
-          decoration: BoxDecoration(
-            color: Theme.of(context).colorScheme.surfaceContainerHighest,
-            borderRadius: BorderRadius.circular(12),
-          ),
-          child: const Center(child: Icon(Icons.videocam_outlined, size: 40)),
-        ),
-      );
-    }
+    final raw = player?.value.size;
+    final hasSize = raw != null && raw.width > 2 && raw.height > 2;
+    final ratio = hasSize
+        ? raw.width / raw.height
+        : (aspectRatio != null && aspectRatio! > 0 ? aspectRatio! : 1.0);
+    final ready = player != null && player.value.isInitialized && hasSize;
     return ClipRRect(
       borderRadius: BorderRadius.circular(12),
-      child: SizedBox(
-        height: height,
-        width: double.infinity,
-        child: FittedBox(
-          fit: BoxFit.contain,
-          child: SizedBox(
-            width: player.value.size.width,
-            height: player.value.size.height,
-            child: VideoPlayer(player),
+      child: ColoredBox(
+        color: Theme.of(context).colorScheme.surfaceContainerHighest,
+        child: ConstrainedBox(
+          constraints: BoxConstraints(maxHeight: maxHeight),
+          child: AspectRatio(
+            aspectRatio: ratio,
+            child: ready
+                ? FittedBox(
+                    fit: BoxFit.contain,
+                    child: SizedBox(
+                      width: raw.width,
+                      height: raw.height,
+                      child: VideoPlayer(player),
+                    ),
+                  )
+                : const Center(child: CircularProgressIndicator()),
           ),
         ),
       ),

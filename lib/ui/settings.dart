@@ -3,6 +3,7 @@ import 'package:provider/provider.dart';
 
 import '../l10n/strings.dart';
 import '../state/library.dart';
+import '../state/player.dart';
 import '../state/settings.dart';
 
 class SettingsScreen extends StatelessWidget {
@@ -46,6 +47,47 @@ class SettingsScreen extends StatelessWidget {
             title: Text(s.librarySizeLabel),
             subtitle: Text(s.librarySize(library.songs.length, library.albums.length, library.artists.length)),
           ),
+          _Section(s.statistics),
+          ListTile(
+            title: Text(s.listenTime),
+            subtitle: Text(s.listenHours(library.listenMs)),
+          ),
+          ListTile(
+            title: Text(s.tracksListened),
+            subtitle: Text('${library.listenedTrackCount}'),
+          ),
+          if (!settings.statsEnabled)
+            Padding(
+              padding: const EdgeInsets.fromLTRB(16, 0, 16, 8),
+              child: Text(
+                s.statisticsOffHint,
+                style: Theme.of(context).textTheme.bodySmall,
+              ),
+            ),
+          Padding(
+            padding: const EdgeInsets.fromLTRB(16, 4, 16, 8),
+            child: FilledButton.tonal(
+              onPressed: () async {
+                final player = context.read<PlayerController>();
+                if (settings.statsEnabled) {
+                  player.discardListenClock();
+                  await library.clearListenStats();
+                  await settings.setStatsEnabled(false);
+                } else {
+                  await settings.setStatsEnabled(true);
+                  player.resumeListenClock();
+                }
+              },
+              child: Text(settings.statsEnabled ? s.disableStatistics : s.enableStatistics),
+            ),
+          ),
+          SwitchListTile(
+            secondary: Icon(settings.offlineMode ? Icons.cloud_off_rounded : Icons.cloud_rounded),
+            title: Text(s.offlineMode),
+            subtitle: Text(s.offlineModeHint),
+            value: settings.offlineMode,
+            onChanged: settings.setOfflineMode,
+          ),
           _Section(s.hiddenSongs),
           if (library.hiddenTracks.isEmpty)
             ListTile(
@@ -67,6 +109,10 @@ class SettingsScreen extends StatelessWidget {
             title: Text(s.appName),
             subtitle: Text(s.aboutBlurb),
           ),
+          _Section(s.faq),
+          _FaqTile(question: s.faqMicQ, answer: s.faqMicA),
+          _FaqTile(question: s.faqWavesQ, answer: s.faqWavesA),
+          _FaqTile(question: s.faqRecordQ, answer: s.faqRecordA),
         ],
       ),
     );
@@ -91,6 +137,34 @@ class SettingsScreen extends StatelessWidget {
       },
     );
     if (selected != null) await settings.setLanguage(selected);
+  }
+}
+
+class _FaqTile extends StatelessWidget {
+  const _FaqTile({required this.question, required this.answer});
+
+  final String question;
+  final String answer;
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    return ExpansionTile(
+      title: Text(question),
+      childrenPadding: const EdgeInsets.fromLTRB(16, 0, 16, 16),
+      children: [
+        Align(
+          alignment: Alignment.centerLeft,
+          child: Text(
+            answer,
+            style: theme.textTheme.bodyMedium?.copyWith(
+              color: theme.colorScheme.onSurface.withValues(alpha: 0.72),
+              height: 1.4,
+            ),
+          ),
+        ),
+      ],
+    );
   }
 }
 

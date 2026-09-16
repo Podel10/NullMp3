@@ -165,6 +165,13 @@ class S {
         '统计已清除，不再保存。',
       );
 
+  String get offlineMode => _t('Offline mode', 'Офлайн-режим', '离线模式');
+  String get offlineModeHint => _t(
+        'No internet. Online lyrics and cover search stay off.',
+        'Без интернета. Поиск текстов и обложек в сети выключен.',
+        '无网络。在线歌词和封面搜索已关闭。',
+      );
+
   String get hiddenSongs => _t('Hidden songs', 'Скрытые песни', '已隐藏歌曲');
   String get nothingHidden => _t('Nothing hidden', 'Ничего не скрыто', '没有隐藏歌曲');
   String get hiddenHint => _t(
@@ -212,6 +219,7 @@ class S {
   String get gifLength => _t('Length', 'Длительность', '时长');
   String get gifFps => _t('Frames per second', 'Кадров в секунду', '每秒帧数');
   String get gifWidth => _t('Width', 'Ширина', '宽度');
+  String get gifAuto => _t('Auto', 'Авто', '自动');
   String get convert => _t('Convert', 'Конвертировать', '开始转换');
   String get converting => _t('Converting…', 'Конвертирую…', '正在转换…');
   String get preview => _t('Preview', 'Предпросмотр', '预览');

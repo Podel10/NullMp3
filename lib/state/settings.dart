@@ -9,6 +9,7 @@ import 'package:path_provider/path_provider.dart';
 import 'package:permission_handler/permission_handler.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
+import '../data/network.dart';
 import '../data/scanner.dart';
 import '../l10n/strings.dart';
 import '../theme/app_theme.dart';
@@ -39,6 +40,7 @@ class SettingsController extends ChangeNotifier {
   static const _kLanguage = 'language';
   static const _kStatsEnabled = 'statsEnabled';
   static const _kBeatHalo = 'beatHalo';
+  static const _kOffline = 'offlineMode';
 
   late SharedPreferences _prefs;
 
@@ -64,6 +66,7 @@ class SettingsController extends ChangeNotifier {
   bool continuous = true;
   bool statsEnabled = true;
   bool beatHalo = false;
+  bool offlineMode = false;
   AppLanguage language = AppLanguage.english;
 
   bool _loaded = false;
@@ -135,6 +138,8 @@ class SettingsController extends ChangeNotifier {
     continuous = _prefs.getBool(_kContinuous) ?? true;
     statsEnabled = _prefs.getBool(_kStatsEnabled) ?? true;
     beatHalo = _prefs.getBool(_kBeatHalo) ?? false;
+    offlineMode = _prefs.getBool(_kOffline) ?? false;
+    NetworkGate.offline = offlineMode;
     eqEnabled = _prefs.getBool(_kEqOn) ?? true;
     eqPreset = _prefs.getString(_kEqPreset) ?? 'Normal';
     language = AppLanguage.fromName(_prefs.getString(_kLanguage));
@@ -253,6 +258,13 @@ class SettingsController extends ChangeNotifier {
   Future<void> setBeatHalo(bool value) async {
     beatHalo = value;
     await _prefs.setBool(_kBeatHalo, value);
+    notifyListeners();
+  }
+
+  Future<void> setOfflineMode(bool value) async {
+    offlineMode = value;
+    NetworkGate.offline = value;
+    await _prefs.setBool(_kOffline, value);
     notifyListeners();
   }
 

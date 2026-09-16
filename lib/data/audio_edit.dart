@@ -1,14 +1,13 @@
 import 'dart:io';
-import 'dart:math' as math;
-import 'dart:typed_data';
 
+import 'package:audio_metadata_reader/audio_metadata_reader.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/services.dart';
 import 'package:path/path.dart' as p;
 import 'package:path_provider/path_provider.dart';
 
 import 'file_actions.dart';
-import 'tag_write.dart';
+import 'mp3_cut.dart';
 
 const _filesChannel = MethodChannel('com.nullmp3.nullmp3/files');
 
@@ -59,12 +58,20 @@ Future<AudioWaveform> loadAudioWaveform(String path, {int bars = 400, int durati
       }
     } catch (_) {}
   }
+  var duration = durationMs;
+  var sampleRate = 44100;
+  var bitrate = 128000;
+  try {
+    final meta = readMetadata(File(path), getImage: false);
+    duration = meta.duration?.inMilliseconds ?? duration;
+  } catch (_) {}
+  final ext = p.extension(path).toLowerCase();
   return AudioWaveform(
-    peaks: List<double>.filled(bars, 0.12),
-    durationMs: durationMs,
-    sampleRate: 44100,
-    bitrate: 128000,
-    mime: p.extension(path).toLowerCase() == '.mp3' ? 'audio/mpeg' : 'audio/*',
+    peaks: envelopePeaks(path, bars),
+    durationMs: duration,
+    sampleRate: sampleRate,
+    bitrate: bitrate,
+    mime: ext == '.mp3' ? 'audio/mpeg' : ext == '.wav' || ext == '.wave' ? 'audio/wav' : 'audio/*',
   );
 }
 
@@ -116,73 +123,19 @@ Future<String> cutAudioFile({
   final dir = await _writableCutDir();
   final destPath = p.join(dir, _cutFileName(title, ext));
   await Directory(dir).create(recursive: true);
-  return _cutAudioFileDart(
-    path: path,
-    destPath: destPath,
-    startMs: startMs,
-    endMs: endMs,
-    durationMs: durationMs,
-    title: title,
-    artist: artist,
-    album: album,
-  );
-}
-
-Future<String> _cutAudioFileDart({
-  required String path,
-  required String destPath,
-  required int startMs,
-  required int endMs,
-  required int durationMs,
-  required String title,
-  required String artist,
-  required String album,
-}) async {
-  final source = File(path);
-  final dest = File(destPath);
-  final length = await source.length().timeout(const Duration(seconds: 2));
-  if (length < 256) throw StateError('too_small');
-  final audioStart = await _id3Skip(source, length);
-  final audioLen = math.max(1, length - audioStart);
-  final dur = math.max(1, durationMs);
-  var from = audioStart + audioLen * startMs.clamp(0, dur) ~/ dur;
-  var to = audioStart + audioLen * endMs.clamp(startMs + 200, dur) ~/ dur;
-  from = from.clamp(audioStart, length - 256);
-  to = to.clamp(from + 256, length);
-
-  final out = dest.openWrite();
-  try {
-    out.add(id3v23TextTag(title: title, artist: artist, album: album));
-    await out.addStream(source.openRead(from, to)).timeout(const Duration(seconds: 8));
-    await out.flush();
-  } finally {
-    try {
-      await out.close();
-    } catch (_) {}
-  }
-  return dest.path;
-}
-
-Future<int> _id3Skip(File file, int length) async {
-  try {
-    final bytes = await file.openRead(0, math.min(10, length)).fold<BytesBuilder>(
-      BytesBuilder(copy: false),
-      (builder, chunk) => builder..add(chunk),
-    ).timeout(const Duration(milliseconds: 800));
-    final head = bytes.takeBytes();
-    if (head.length < 10 || head[0] != 0x49 || head[1] != 0x44 || head[2] != 0x33) {
-      return 0;
-    }
-    if (head[6] & 0x80 != 0 || head[7] & 0x80 != 0 || head[8] & 0x80 != 0 || head[9] & 0x80 != 0) {
-      return 0;
-    }
-    final size = (head[9] & 0x7F) | ((head[8] & 0x7F) << 7) | ((head[7] & 0x7F) << 14) | ((head[6] & 0x7F) << 21);
-    final total = 10 + size;
-    if (total <= 10 || total > length - 256) return 0;
-    return total;
-  } catch (_) {
-    return 0;
-  }
+  final ok = await compute(cutAudioJob, {
+    'path': path,
+    'destPath': destPath,
+    'startMs': startMs,
+    'endMs': endMs,
+    'durationMs': durationMs,
+    'title': title,
+    'artist': artist,
+    'album': album,
+    'ext': ext.toLowerCase(),
+  }).timeout(const Duration(seconds: 50));
+  if (ok != true) throw StateError('cut_failed');
+  return destPath;
 }
 
 String _cutFileName(String title, String ext) {

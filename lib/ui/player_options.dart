@@ -151,12 +151,12 @@ class PlayerOptionsSheet extends StatelessWidget {
                 _GridAction(
                   icon: Icons.auto_awesome_rounded,
                   label: s.autoStyle,
-                  onTap: () => _open(context, CoverSearchScreen(track: track)),
+                  onTap: () => _openOnline(context, CoverSearchScreen(track: track)),
                 ),
                 _GridAction(
                   icon: Icons.gif_box_outlined,
                   label: s.searchGif,
-                  onTap: () => _open(
+                  onTap: () => _openOnline(
                     context,
                     CoverSearchScreen(track: track, kind: CoverSearchKind.gif),
                   ),
@@ -164,7 +164,7 @@ class PlayerOptionsSheet extends StatelessWidget {
                 _GridAction(
                   icon: Icons.image_search_rounded,
                   label: s.searchImage,
-                  onTap: () => _open(
+                  onTap: () => _openOnline(
                     context,
                     CoverSearchScreen(track: track, kind: CoverSearchKind.image),
                   ),
@@ -240,6 +240,16 @@ class PlayerOptionsSheet extends StatelessWidget {
         ),
       ),
     );
+  }
+
+  Future<void> _openOnline(BuildContext sheetContext, Widget page) async {
+    if (host.read<SettingsController>().offlineMode) {
+      Navigator.pop(sheetContext);
+      if (!host.mounted) return;
+      ScaffoldMessenger.of(host).showSnackBar(SnackBar(content: Text(host.s.offlineModeHint)));
+      return;
+    }
+    await _open(sheetContext, page);
   }
 
   Future<void> _open(BuildContext sheetContext, Widget page, {bool playTrack = false}) async {

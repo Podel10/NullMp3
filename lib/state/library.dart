@@ -541,7 +541,7 @@ class LibraryController extends ChangeNotifier {
     playCounts = {
       for (final entry in playCounts.entries)
         if (entry.key != oldPath) entry.key: entry.value,
-      if (plays != null) updated.path: plays,
+      updated.path: ?plays,
     };
     await _prefs.setString(_kPlayCounts, jsonEncode(playCounts));
     recentlyPlayed = [for (final path in recentlyPlayed) path == oldPath ? updated.path : path];

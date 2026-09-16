@@ -39,6 +39,18 @@ class PlayerController extends ChangeNotifier {
 
     player.positionStream.listen((position) {
       if (playing && position.inMilliseconds > 0) _lastPosition = position;
+      final now = DateTime.now();
+      if (playing &&
+          defaultTargetPlatform == TargetPlatform.android &&
+          (_lastSessionPush == null || now.difference(_lastSessionPush!) >= const Duration(seconds: 1))) {
+        _lastSessionPush = now;
+        _pushSession();
+      }
+      if (playing &&
+          (_lastSessionPersist == null || now.difference(_lastSessionPersist!) >= const Duration(seconds: 5))) {
+        _lastSessionPersist = now;
+        unawaited(_persistSession());
+      }
     });
 
     player.errorStream.listen((_) {
@@ -54,14 +66,20 @@ class PlayerController extends ChangeNotifier {
   // Created synchronously so the UI can bind streams immediately.
   // Interruptions are handled below: keep playing when another app takes
   // media focus, but still pause for phone calls and unplugged headphones.
-  final AudioPlayer player = AudioPlayer(
+  // Equalizer must live in this pipeline or AndroidEqualizer.setEnabled is a no-op.
+  final AndroidEqualizer _equalizer = AndroidEqualizer();
+  late final AudioPlayer player = AudioPlayer(
     handleInterruptions: false,
     maxSkipsOnError: 8,
     androidAudioOffloadPreferences: const AndroidAudioOffloadPreferences(
       audioOffloadMode: AndroidAudioOffloadMode.disabled,
     ),
+    audioPipeline: AudioPipeline(
+      androidAudioEffects: [
+        if (!kIsWeb && defaultTargetPlatform == TargetPlatform.android) _equalizer,
+      ],
+    ),
   );
-  AndroidEqualizer? _equalizer;
 
   List<Track> queue = [];
   int index = 0;
@@ -88,6 +106,8 @@ class PlayerController extends ChangeNotifier {
   bool _userPaused = false;
   DateTime? _ignoreFocusUntil;
   Duration _lastPosition = Duration.zero;
+  DateTime? _lastSessionPush;
+  DateTime? _lastSessionPersist;
   StreamSubscription<void>? _noisySub;
   StreamSubscription<AudioInterruptionEvent>? _interruptSub;
   static const _session = MethodChannel('com.nullmp3.nullmp3/session');
@@ -108,6 +128,7 @@ class PlayerController extends ChangeNotifier {
     try {
       await player.setPitch(settings.pitch);
     } catch (_) {}
+    await _applyEqualizer();
     await _configureAudioSession();
     _session.setMethodCallHandler((call) async {
       switch (call.method) {
@@ -284,6 +305,7 @@ class PlayerController extends ChangeNotifier {
       } else {
         await player.pause();
       }
+      unawaited(_persistSession());
       return;
     }
     if (_loadedPath != current!.path) {
@@ -582,8 +604,13 @@ class PlayerController extends ChangeNotifier {
     shuffle = prefs.getBool('sessionShuffle') ?? false;
     final storedRepeat = prefs.getInt('sessionRepeat') ?? 0;
     repeat = storedRepeat == 2 || storedRepeat == RepeatKind.one.index ? RepeatKind.one : RepeatKind.off;
+    final maxMs = current?.durationMs ?? 0;
+    final cap = maxMs > 1000 ? maxMs : 24 * 60 * 60 * 1000;
+    final posMs = (prefs.getInt('sessionPosition') ?? 0).clamp(0, cap);
+    _lastPosition = Duration(milliseconds: posMs);
     notifyListeners();
     unawaited(_extractColor());
+    unawaited(_loadCurrent(play: false, position: _lastPosition));
   }
 
   Future<void> _loadIndex(int nextIndex, {required bool play, bool recordHistory = true}) async {
@@ -681,6 +708,7 @@ class PlayerController extends ChangeNotifier {
     }
     unawaited(_extractColor());
     unawaited(_persistSession());
+    unawaited(_applyEqualizer());
     _pushSession();
     notifyListeners();
     if (play || playing) _beginListenClock();
@@ -825,11 +853,10 @@ class PlayerController extends ChangeNotifier {
   Future<void> refreshArtwork() => _extractColor();
 
   Future<void> _applyEqualizer() async {
-    final eq = _equalizer;
-    if (eq == null) return;
+    if (kIsWeb || defaultTargetPlatform != TargetPlatform.android) return;
     try {
-      await eq.setEnabled(settings.eqEnabled);
-      final params = await eq.parameters.timeout(const Duration(milliseconds: 1500));
+      await _equalizer.setEnabled(settings.eqEnabled);
+      final params = await _equalizer.parameters.timeout(const Duration(milliseconds: 1500));
       for (var i = 0; i < params.bands.length; i++) {
         final band = params.bands[i];
         final value = settings.eqBands[i.clamp(0, settings.eqBands.length - 1)];

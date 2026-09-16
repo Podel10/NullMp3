@@ -64,9 +64,11 @@ class _BeatHaloState extends State<BeatHalo> with SingleTickerProviderStateMixin
     _ticker = createTicker(_onTick)..start();
     _sessionSub = widget.sessionIds?.listen(_onSession);
     ArtworkStore.instance.addListener(_onArtwork);
-    _sub = _events.receiveBroadcastStream().listen(_onData, onError: (_) {
-      _live = false;
-    });
+    if (!kIsWeb && defaultTargetPlatform == TargetPlatform.android) {
+      _sub = _events.receiveBroadcastStream().listen(_onData, onError: (_) {
+        _live = false;
+      });
+    }
     _scheduleCapture();
     unawaited(_loadRim());
   }

@@ -21,7 +21,7 @@ class VideoToGifScreen extends StatefulWidget {
 
 class _VideoToGifScreenState extends State<VideoToGifScreen> {
   static const _fpsChoices = [8, 12, 15];
-  static const _widthChoices = [240, 320, 480, 576];
+  static const _widthChoices = [240, 320, 480, 576, 720];
   static const _maxSpanMs = 15000;
 
   String? _sourcePath;
@@ -29,7 +29,7 @@ class _VideoToGifScreenState extends State<VideoToGifScreen> {
   int _startMs = 0;
   int _spanMs = 3000;
   int _fps = 12;
-  int _width = 320;
+  int? _width;
   bool _busy = false;
   GifResult? _result;
   GifStep? _step;
@@ -65,6 +65,20 @@ class _VideoToGifScreenState extends State<VideoToGifScreen> {
     return left.clamp(500, _maxSpanMs);
   }
 
+  int get _sourceWidth => _info?.width ?? 0;
+
+  List<int> get _widths {
+    final src = _sourceWidth;
+    final extra = src >= 80 && !_widthChoices.contains(src) ? [src] : const <int>[];
+    return [..._widthChoices, ...extra]..sort();
+  }
+
+  int get _outputWidth {
+    final src = _sourceWidth;
+    if (_width == null) return src > 0 ? src.clamp(80, 1080) : 480;
+    return _width!;
+  }
+
   Future<void> _pick() async {
     final picked = await FilePicker.pickFiles(type: FileType.video);
     String? path;
@@ -82,18 +96,20 @@ class _VideoToGifScreenState extends State<VideoToGifScreen> {
       _busy = true;
     });
     unawaited(_preview.pause());
-    unawaited(_preview.setVideoFile(path));
+    final loading = _preview.setVideoFile(path);
     try {
       final info = await readVideoInfo(path);
       if (!mounted) return;
       setState(() {
         _info = info;
         _spanMs = info.durationMs <= 0 ? 3000 : _spanMs.clamp(500, _maxSpan);
-        if (info.width >= 576 && _width < 480) _width = 480;
+        _width = null;
         _busy = false;
       });
       _preview.setRange(_startMs, _startMs + _spanMs);
-      unawaited(_preview.seek(_startMs));
+      await loading;
+      if (!mounted) return;
+      await _preview.seek(_startMs);
     } catch (_) {
       if (!mounted) return;
       setState(() => _busy = false);
@@ -120,7 +136,7 @@ class _VideoToGifScreenState extends State<VideoToGifScreen> {
         startMs: _startMs,
         endMs: _startMs + _spanMs,
         fps: _fps,
-        width: _width,
+        width: _outputWidth,
         name: '${p.basenameWithoutExtension(path)}-gif',
       );
       if (!mounted) return;
@@ -224,7 +240,10 @@ class _VideoToGifScreenState extends State<VideoToGifScreen> {
             ),
           if (info != null) ...[
             const SizedBox(height: 16),
-            ClipVideoView(controller: _preview),
+            ClipVideoView(
+              controller: _preview,
+              aspectRatio: info.hasSize ? info.width / info.height : null,
+            ),
             const SizedBox(height: 8),
             ClipPreviewButton(
               playing: _preview.playing,
@@ -282,8 +301,14 @@ class _VideoToGifScreenState extends State<VideoToGifScreen> {
             const SizedBox(height: 6),
             Wrap(
               spacing: 8,
+              runSpacing: 8,
               children: [
-                for (final width in _widthChoices)
+                ChoiceChip(
+                  label: Text(info.hasSize ? '${s.gifAuto} (${info.width} px)' : s.gifAuto),
+                  selected: _width == null,
+                  onSelected: _busy ? null : (_) => setState(() => _width = null),
+                ),
+                for (final width in _widths)
                   ChoiceChip(
                     label: Text('$width px'),
                     selected: _width == width,

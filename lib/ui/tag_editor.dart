@@ -107,6 +107,10 @@ class _TagEditorSheetState extends State<TagEditorSheet> {
 
   Future<void> _autoCover() async {
     if (_picking) return;
+    if (context.read<SettingsController>().offlineMode) {
+      setState(() => _error = context.s.offlineModeHint);
+      return;
+    }
     setState(() {
       _picking = true;
       _error = null;

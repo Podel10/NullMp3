@@ -4,6 +4,7 @@ import 'dart:io';
 import 'dart:typed_data';
 
 import '../models/models.dart';
+import 'network.dart';
 
 const _kAgent =
     'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36';
@@ -488,6 +489,7 @@ Future<Uint8List?> _getBytes(
   String? accept,
   Map<String, String>? extraHeaders,
 }) async {
+  NetworkGate.requireOnline();
   final client = HttpClient();
   try {
     client.userAgent = _kAgent;
