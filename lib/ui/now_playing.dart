@@ -172,7 +172,7 @@ class NowPlayingScreen extends StatelessWidget {
                       onPressed: player.cycleRepeat,
                       tooltip: context.s.repeatTrack,
                       color: player.repeat == RepeatKind.one ? onAmbient : muted,
-                      icon: const Icon(Icons.repeat_one_rounded),
+                      icon: const Icon(Icons.repeat_rounded),
                     ),
                     IconButton(
                       onPressed: player.previous,

@@ -173,10 +173,58 @@ class S {
         '隐藏的歌曲仍留在设备上，只是不出现在曲库中',
       );
   String get aboutBlurb => _t(
-        'A local music player inspired by Muzio — library tabs, mini player, now playing, equalizer, sleep timer, lyrics, and playlists.',
-        'Локальный плеер в духе Muzio — вкладки библиотеки, мини-плеер, эквалайзер, таймер сна, тексты и плейлисты.',
-        '受 Muzio 启发的本地播放器：曲库、迷你播放条、均衡器、睡眠定时、歌词和播放列表。',
+        'A local music player: library tabs, mini player, now playing, equalizer, sleep timer, lyrics, and playlists.',
+        'Локальный плеер: вкладки библиотеки, мини-плеер, эквалайзер, таймер сна, тексты и плейлисты.',
+        '本地音乐播放器：曲库、迷你播放条、均衡器、睡眠定时、歌词和播放列表。',
       );
+  String get faq => _t('FAQ', 'FAQ', '常见问题');
+  String get faqMicQ => _t('Why does it ask for the microphone?', 'Зачем нужен микрофон?', '为什么要麦克风？');
+  String get faqMicA => _t(
+        'Android has no public “what is playing now” spectrum API. Beat waves use the system Visualizer, and it is gated behind the microphone permission. Null MP3 does not listen to the room mic: it reads the frequency bands of the track already playing.',
+        'У Android нет отдельного разрешения «спектр плеера». Волны под бит читают системный Visualizer, а он спрятан за разрешением микрофона. Null MP3 не слушает комнату: берёт частоты уже играющего трека.',
+        'Android 没有单独的“正在播放频谱”权限。节拍光环用系统 Visualizer，它被归在麦克风权限里。Null MP3 不会听环境声，只读取当前曲目的频段。',
+      );
+  String get faqWavesQ => _t('What are beat waves?', 'Что такое волны под бит?', '节拍光环是什么？');
+  String get faqWavesA => _t(
+        'A glow around the cover on the now playing screen. It follows bass and the beat, and picks colours from the artwork. Turn it on in display settings for that track. If waves are off, the microphone is not used.',
+        'Свечение вокруг обложки на экране воспроизведения. Оно дышит басами и битом и берёт цвет с картинки. Включается в настройке отображения трека. Если волны выключены, микрофон не нужен.',
+        '正在播放页封面周围的光晕，随低音和节拍起伏，颜色来自封面。在该曲的显示设置里打开。关闭光环后不会使用麦克风。',
+      );
+  String get faqRecordQ => _t('Does it record or upload sound?', 'Оно записывает или отправляет звук?', '会录音或上传声音吗？');
+  String get faqRecordA => _t(
+        'No. Nothing is saved to a file and nothing is sent to a server. Spectrum values stay in memory to draw the halo, then they are dropped.',
+        'Нет. Звук не пишется в файл и никуда не отправляется. Цифры спектра живут в памяти, пока рисуются волны, и сразу забываются.',
+        '不会。音频不会存成文件，也不会上传。频谱数据只留在内存里用来画光环，用完即弃。',
+      );
+
+  String get tools => _t('Tools', 'Инструменты', '工具');
+  String get videoToGif => _t('Video to GIF', 'Видео в GIF', '视频转 GIF');
+  String get videoToGifHint => _t(
+        'Turn a short clip into an animated GIF you can use as a cover',
+        'Сделайте из короткого клипа анимированный GIF — например, для обложки',
+        '把短视频做成动图 GIF，可用作封面',
+      );
+  String get gifReading => _t('Reading frames…', 'Читаем кадры…', '正在读取帧…');
+  String get gifBuilding => _t('Building the GIF…', 'Собираем GIF…', '正在生成 GIF…');
+  String get chooseVideo => _t('Choose a video', 'Выбрать видео', '选择视频');
+  String get noVideoChosen => _t('No video chosen yet', 'Видео ещё не выбрано', '尚未选择视频');
+  String get gifStart => _t('Start', 'Начало', '起点');
+  String get gifLength => _t('Length', 'Длительность', '时长');
+  String get gifFps => _t('Frames per second', 'Кадров в секунду', '每秒帧数');
+  String get gifWidth => _t('Width', 'Ширина', '宽度');
+  String get convert => _t('Convert', 'Конвертировать', '开始转换');
+  String get converting => _t('Converting…', 'Конвертирую…', '正在转换…');
+  String get preview => _t('Preview', 'Предпросмотр', '预览');
+  String get previewHint => _t(
+        'Play the selected piece before saving',
+        'Прослушайте выбранный фрагмент до сохранения',
+        '保存前先试听选中的片段',
+      );
+  String get previewFailed => _t('Could not preview this clip', 'Не удалось проиграть фрагмент', '无法预览该片段');
+  String gifSaved(String size) => _t('GIF saved, $size', 'GIF сохранён, $size', '已保存 GIF，$size');
+  String get gifFailed => _t('Could not build the GIF', 'Не удалось собрать GIF', '无法生成 GIF');
+  String get videoUnreadable => _t('Could not read this video', 'Не удалось прочитать это видео', '无法读取该视频');
+  String gifFrames(int count) => _t('$count frames', 'кадров: $count', '$count 帧');
 
   String get libraryFolders => _t('Library folders', 'Папки библиотеки', '曲库文件夹');
   String get libraryFoldersHint =>

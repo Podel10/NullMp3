@@ -49,12 +49,13 @@ class _BeatHaloState extends State<BeatHalo> with SingleTickerProviderStateMixin
   double _bass = 0;
   double _pulse = 0;
   int? _sessionId;
-  int? _listeningSession;
   int _syncGen = 0;
   int _rimGen = 0;
   int _artGen = -1;
   bool _live = false;
   List<Color> _rim = const [];
+
+  Timer? _startTimer;
 
   @override
   void initState() {
@@ -63,7 +64,10 @@ class _BeatHaloState extends State<BeatHalo> with SingleTickerProviderStateMixin
     _ticker = createTicker(_onTick)..start();
     _sessionSub = widget.sessionIds?.listen(_onSession);
     ArtworkStore.instance.addListener(_onArtwork);
-    _syncCapture();
+    _sub = _events.receiveBroadcastStream().listen(_onData, onError: (_) {
+      _live = false;
+    });
+    _scheduleCapture();
     unawaited(_loadRim());
   }
 
@@ -74,13 +78,19 @@ class _BeatHaloState extends State<BeatHalo> with SingleTickerProviderStateMixin
       _sessionSub?.cancel();
       _sessionSub = widget.sessionIds?.listen(_onSession);
     }
-    if (widget.sessionId != oldWidget.sessionId && widget.sessionId != _sessionId) {
+    if (widget.sessionId != oldWidget.sessionId &&
+        widget.sessionId != null &&
+        widget.sessionId! > 0 &&
+        widget.sessionId != _sessionId) {
       _sessionId = widget.sessionId;
+      _live = false;
+      if (widget.playing && widget.enabled) _scheduleCapture();
     }
-    if (oldWidget.enabled != widget.enabled ||
-        oldWidget.playing != widget.playing ||
-        oldWidget.sessionId != widget.sessionId) {
-      _syncCapture();
+    if (oldWidget.enabled != widget.enabled || oldWidget.playing != widget.playing) {
+      if (!widget.enabled || !widget.playing) {
+        unawaited(_stopCapture());
+      }
+      _scheduleCapture();
     }
     if (oldWidget.artworkPath != widget.artworkPath ||
         oldWidget.circle != widget.circle ||
@@ -91,6 +101,7 @@ class _BeatHaloState extends State<BeatHalo> with SingleTickerProviderStateMixin
 
   @override
   void dispose() {
+    _startTimer?.cancel();
     ArtworkStore.instance.removeListener(_onArtwork);
     unawaited(_stopCapture());
     _sub?.cancel();
@@ -124,9 +135,24 @@ class _BeatHaloState extends State<BeatHalo> with SingleTickerProviderStateMixin
   }
 
   void _onSession(int? id) {
+    if (id == null || id <= 0) return;
     if (_sessionId == id) return;
     _sessionId = id;
-    _syncCapture();
+    _live = false;
+    if (widget.playing && widget.enabled) _scheduleCapture();
+  }
+
+  void _scheduleCapture() {
+    _startTimer?.cancel();
+    if (!widget.enabled || !widget.playing) {
+      unawaited(_stopCapture());
+      return;
+    }
+    if (_live) return;
+    _startTimer = Timer(const Duration(milliseconds: 500), () {
+      if (!mounted || !widget.playing || !widget.enabled || _live) return;
+      unawaited(_syncCapture());
+    });
   }
 
   void _onTick(Duration _) {
@@ -150,35 +176,28 @@ class _BeatHaloState extends State<BeatHalo> with SingleTickerProviderStateMixin
   Future<void> _syncCapture() async {
     final gen = ++_syncGen;
     if (kIsWeb || !widget.enabled || !widget.playing) {
-      await _stopCapture();
       return;
     }
+    if (_live) return;
     final id = _sessionId ?? widget.sessionId;
-    if (id == null || id <= 0) {
-      await _stopCapture();
-      return;
-    }
-    if (_listeningSession == id && _live) return;
+    if (id == null || id <= 0) return;
     final allowed = await _ensureMic();
     if (!mounted || gen != _syncGen) return;
-    if (!allowed) {
-      await _stopCapture();
-      return;
-    }
-    _listeningSession = id;
-    _sub?.cancel();
-    _sub = _events.receiveBroadcastStream().listen(_onData, onError: (_) {
-      _live = false;
-    });
+    if (!allowed) return;
     try {
       final ok = await _methods.invokeMethod<bool>('start', {'sessionId': id}) ?? false;
       if (!mounted || gen != _syncGen) return;
       _live = ok;
-      if (!ok) _listeningSession = null;
     } catch (_) {
       _live = false;
-      _listeningSession = null;
     }
+  }
+
+  Future<void> _stopCapture() async {
+    _live = false;
+    try {
+      await _methods.invokeMethod<void>('stop');
+    } catch (_) {}
   }
 
   Future<bool> _ensureMic() async {
@@ -193,17 +212,8 @@ class _BeatHaloState extends State<BeatHalo> with SingleTickerProviderStateMixin
     }
   }
 
-  Future<void> _stopCapture() async {
-    _listeningSession = null;
-    _live = false;
-    await _sub?.cancel();
-    _sub = null;
-    try {
-      await _methods.invokeMethod<void>('stop');
-    } catch (_) {}
-  }
-
   void _onData(dynamic raw) {
+    if (!widget.playing) return;
     if (raw is! Map) return;
     final peaks = raw['peaks'];
     if (peaks is! List || peaks.isEmpty) return;

@@ -3,6 +3,7 @@ import 'package:provider/provider.dart';
 
 import '../data/artwork.dart';
 import '../data/playback_file.dart';
+import '../data/video_gif.dart';
 import '../l10n/strings.dart';
 import '../models/models.dart';
 import '../state/library.dart';
@@ -17,6 +18,7 @@ import 'recommended.dart';
 import 'search.dart';
 import 'settings.dart';
 import 'theme_settings.dart';
+import 'tools.dart';
 import 'widgets.dart';
 
 class HomeScreen extends StatefulWidget {
@@ -112,6 +114,11 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
                 isScrollable: true,
                 tabAlignment: TabAlignment.start,
                 padding: EdgeInsets.zero,
+                onTap: (index) {
+                  if (LibraryTab.values[index] == LibraryTab.recommended) {
+                    _scan();
+                  }
+                },
                 tabs: [
                   Tab(text: s.tabRecommended),
                   Tab(text: s.tabSongs),
@@ -275,7 +282,7 @@ class _AppDrawer extends StatelessWidget {
               },
             ),
             ListTile(
-              leading: const Icon(Icons.bedtime_outlined),
+              leading: const Icon(Icons.alarm_outlined),
               title: Text(s.sleepTimer),
               onTap: () {
                 Navigator.pop(context);
@@ -298,6 +305,15 @@ class _AppDrawer extends StatelessWidget {
                 onAddFiles();
               },
             ),
+            if (videoGifSupported)
+              ListTile(
+                leading: const Icon(Icons.handyman_outlined),
+                title: Text(s.tools),
+                onTap: () {
+                  Navigator.pop(context);
+                  Navigator.push(context, MaterialPageRoute<void>(builder: (_) => const ToolsScreen()));
+                },
+              ),
             ListTile(
               leading: const Icon(Icons.settings_outlined),
               title: Text(s.settings),
@@ -351,12 +367,12 @@ class _LibraryBody extends StatelessWidget {
       );
     }
     return switch (tab) {
-      LibraryTab.recommended => const RecommendedTab(),
+      LibraryTab.recommended => RecommendedTab(onRefresh: onScan),
       LibraryTab.songs => _SongsTab(onRefresh: onScan),
-      LibraryTab.albums => const _AlbumsTab(),
-      LibraryTab.artists => const _ArtistsTab(),
-      LibraryTab.playlists => const _PlaylistsTab(),
-      LibraryTab.folders => const _FoldersTab(),
+      LibraryTab.albums => _AlbumsTab(onRefresh: onScan),
+      LibraryTab.artists => _ArtistsTab(onRefresh: onScan),
+      LibraryTab.playlists => _PlaylistsTab(onRefresh: onScan),
+      LibraryTab.folders => _FoldersTab(onRefresh: onScan),
     };
   }
 }
@@ -510,7 +526,9 @@ class _SongsTabState extends State<_SongsTab> {
 }
 
 class _AlbumsTab extends StatelessWidget {
-  const _AlbumsTab();
+  const _AlbumsTab({required this.onRefresh});
+
+  final Future<void> Function() onRefresh;
 
   @override
   Widget build(BuildContext context) {
@@ -518,8 +536,11 @@ class _AlbumsTab extends StatelessWidget {
     final s = context.s;
     final width = MediaQuery.sizeOf(context).width;
     final columns = width > 1200 ? 5 : width > 900 ? 4 : width > 600 ? 3 : 2;
-    return GridView.builder(
+    return RefreshIndicator(
+      onRefresh: onRefresh,
+      child: GridView.builder(
       padding: const EdgeInsets.all(16),
+      physics: const AlwaysScrollableScrollPhysics(),
       gridDelegate: SliverGridDelegateWithFixedCrossAxisCount(
         crossAxisCount: columns,
         mainAxisSpacing: 16,
@@ -543,12 +564,15 @@ class _AlbumsTab extends StatelessWidget {
           ),
         );
       },
+    ),
     );
   }
 }
 
 class _ArtistsTab extends StatefulWidget {
-  const _ArtistsTab();
+  const _ArtistsTab({required this.onRefresh});
+
+  final Future<void> Function() onRefresh;
 
   @override
   State<_ArtistsTab> createState() => _ArtistsTabState();
@@ -582,8 +606,11 @@ class _ArtistsTabState extends State<_ArtistsTab> {
             }
             return false;
           },
-          child: ListView.builder(
+          child: RefreshIndicator(
+            onRefresh: widget.onRefresh,
+            child: ListView.builder(
             controller: _scroll,
+            physics: const AlwaysScrollableScrollPhysics(),
             padding: const EdgeInsets.only(right: 18),
             itemCount: artists.length,
             itemExtent: _itemExtent,
@@ -596,6 +623,7 @@ class _ArtistsTabState extends State<_ArtistsTab> {
                 onTap: () => Navigator.push(context, MaterialPageRoute<void>(builder: (_) => ArtistDetailScreen(artist: artist))),
               );
             },
+          ),
           ),
         ),
         if (artists.length >= 12)
@@ -620,7 +648,9 @@ class _ArtistsTabState extends State<_ArtistsTab> {
 }
 
 class _PlaylistsTab extends StatelessWidget {
-  const _PlaylistsTab();
+  const _PlaylistsTab({required this.onRefresh});
+
+  final Future<void> Function() onRefresh;
 
   @override
   Widget build(BuildContext context) {
@@ -713,7 +743,13 @@ class _PlaylistsTab extends StatelessWidget {
         ),
     ];
 
-    return ListView(children: tiles);
+    return RefreshIndicator(
+      onRefresh: onRefresh,
+      child: ListView(
+        physics: const AlwaysScrollableScrollPhysics(),
+        children: tiles,
+      ),
+    );
   }
 
   void _openSmart(BuildContext context, String title, List<Track> tracks) {
@@ -752,13 +788,18 @@ class _SmartPlaylistTile extends StatelessWidget {
 }
 
 class _FoldersTab extends StatelessWidget {
-  const _FoldersTab();
+  const _FoldersTab({required this.onRefresh});
+
+  final Future<void> Function() onRefresh;
 
   @override
   Widget build(BuildContext context) {
     final folders = context.watch<LibraryController>().folders;
     final entries = folders.entries.toList();
-    return ListView.builder(
+    return RefreshIndicator(
+      onRefresh: onRefresh,
+      child: ListView.builder(
+      physics: const AlwaysScrollableScrollPhysics(),
       itemCount: entries.length,
       itemBuilder: (context, i) {
         final entry = entries[i];
@@ -774,6 +815,7 @@ class _FoldersTab extends StatelessWidget {
           ),
         );
       },
+    ),
     );
   }
 }

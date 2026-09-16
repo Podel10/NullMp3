@@ -309,14 +309,19 @@ class PlayerOptionsSheet extends StatelessWidget {
     );
     if (confirmed != true || !sheetContext.mounted) return;
     Navigator.pop(sheetContext);
-    if (player.current?.path == track.path) {
+    final wasPlaying = player.playing;
+    final wasCurrent = player.current?.path == track.path;
+    if (wasCurrent) {
       await player.player.pause();
     }
     await Future<void>.delayed(const Duration(milliseconds: 200));
     final error = await library.deleteFromDevice(track);
     if (error == null) {
-      await player.removePath(track.path);
+      await player.removePath(track.path, resume: wasPlaying);
       await settings.forgetFile(track.path);
+    } else if (wasCurrent && wasPlaying) {
+      // The file survived, so undo the pause that freed it for deletion.
+      await player.resumePlayback();
     }
     if (!host.mounted) return;
     ScaffoldMessenger.of(host).showSnackBar(

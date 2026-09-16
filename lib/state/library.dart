@@ -18,6 +18,7 @@ class LibraryController extends ChangeNotifier {
   static const _kPlaylists = 'playlists';
   static const _kPlayCounts = 'playCounts';
   static const _kRecent = 'recentlyPlayed';
+  static const _kListenMs = 'listenMs';
   static const _kHidden = 'hiddenPaths';
 
   late SharedPreferences _prefs;
@@ -28,6 +29,7 @@ class LibraryController extends ChangeNotifier {
   List<Playlist> playlists = [];
   Map<String, int> playCounts = {};
   List<String> recentlyPlayed = [];
+  int listenMs = 0;
   bool scanning = false;
   String? scanMessage;
   SongSort sort = SongSort.title;
@@ -44,6 +46,8 @@ class LibraryController extends ChangeNotifier {
   Map<String, List<Track>>? _foldersCache;
   Timer? _markPlayedNotify;
   Timer? _saveCacheTimer;
+  Timer? _saveListenTimer;
+  Future<void>? _activeScan;
 
   List<Track> get allTracks => _allTracks;
   set allTracks(List<Track> value) {
@@ -66,6 +70,7 @@ class LibraryController extends ChangeNotifier {
     favorites = (_prefs.getStringList(_kFavorites) ?? []).toSet();
     hiddenPaths = (_prefs.getStringList(_kHidden) ?? []).toSet();
     recentlyPlayed = _prefs.getStringList(_kRecent) ?? [];
+    listenMs = _prefs.getInt(_kListenMs) ?? 0;
     final countsRaw = _prefs.getString(_kPlayCounts);
     if (countsRaw != null) {
       playCounts = Map<String, int>.from(
@@ -255,6 +260,18 @@ class LibraryController extends ChangeNotifier {
     required List<String> folders,
     required int minDurationSec,
     List<String> extraFiles = const [],
+  }) {
+    return _activeScan ??= _scan(
+      folders: folders,
+      minDurationSec: minDurationSec,
+      extraFiles: extraFiles,
+    ).whenComplete(() => _activeScan = null);
+  }
+
+  Future<void> _scan({
+    required List<String> folders,
+    required int minDurationSec,
+    List<String> extraFiles = const [],
   }) async {
     final hadCache = allTracks.isNotEmpty;
     scanning = true;
@@ -357,6 +374,16 @@ class LibraryController extends ChangeNotifier {
     }
   }
 
+  Future<void> addLocalTrack(Track track) async {
+    if (allTracks.any((item) => item.path == track.path)) {
+      await replaceTrack(track);
+      return;
+    }
+    allTracks = [...allTracks, track];
+    notifyListeners();
+    _scheduleSaveCache();
+  }
+
   Future<void> addFiles(List<String> paths) async {
     if (paths.isEmpty) return;
     final existing = allTracks.map((t) => t.path).toSet();
@@ -375,6 +402,27 @@ class LibraryController extends ChangeNotifier {
       favorites = {...favorites, path};
     }
     await _prefs.setStringList(_kFavorites, favorites.toList());
+    notifyListeners();
+  }
+
+  int get listenedTrackCount => playCounts.length;
+
+  Future<void> addListenMs(int milliseconds) async {
+    if (milliseconds <= 0) return;
+    listenMs += milliseconds;
+    notifyListeners();
+    _saveListenTimer?.cancel();
+    _saveListenTimer = Timer(const Duration(milliseconds: 400), () {
+      unawaited(_prefs.setInt(_kListenMs, listenMs));
+    });
+  }
+
+  Future<void> clearListenStats() async {
+    _saveListenTimer?.cancel();
+    listenMs = 0;
+    playCounts = {};
+    await _prefs.setInt(_kListenMs, 0);
+    await _prefs.setString(_kPlayCounts, jsonEncode(playCounts));
     notifyListeners();
   }
 

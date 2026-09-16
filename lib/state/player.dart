@@ -21,19 +21,24 @@ import 'settings.dart';
 class PlayerController extends ChangeNotifier {
   PlayerController({required this.library, required this.settings}) {
     player.playingStream.listen((value) {
+      if (value) {
+        _beginListenClock();
+      } else {
+        _flushListenClock();
+      }
       playing = value;
       notifyListeners();
       _pushSession();
     });
 
     player.processingStateStream.listen((state) {
-      if (state == ProcessingState.completed &&
-          !_loading &&
-          _fileEdit == null &&
-          !_handlingComplete &&
-          _isNearEnd()) {
+      if (state == ProcessingState.completed && !_loading && _fileEdit == null && !_handlingComplete) {
         unawaited(_onCompleted());
       }
+    });
+
+    player.positionStream.listen((position) {
+      if (playing && position.inMilliseconds > 0) _lastPosition = position;
     });
 
     player.errorStream.listen((_) {
@@ -78,7 +83,11 @@ class PlayerController extends ChangeNotifier {
   _FileEditHold? _fileEdit;
   final List<int> _history = [];
   int _errorSkips = 0;
+  int? _listenAnchorMs;
   bool _resumeAfterInterruption = false;
+  bool _userPaused = false;
+  DateTime? _ignoreFocusUntil;
+  Duration _lastPosition = Duration.zero;
   StreamSubscription<void>? _noisySub;
   StreamSubscription<AudioInterruptionEvent>? _interruptSub;
   static const _session = MethodChannel('com.nullmp3.nullmp3/session');
@@ -156,12 +165,14 @@ class PlayerController extends ChangeNotifier {
       );
       _noisySub = session.becomingNoisyEventStream.listen((_) {
         _resumeAfterInterruption = false;
+        _userPaused = true;
+        _lastPosition = _heldPosition();
         if (playing) unawaited(player.pause());
       });
       _interruptSub = session.interruptionEventStream.listen((event) {
+        if (_userPaused) return;
+        if (_ignoreFocusUntil != null && DateTime.now().isBefore(_ignoreFocusUntil!)) return;
         if (event.begin) {
-          // Transient loss is a call / alarm. Permanent loss is another
-          // media app — keep playing so both can overlap.
           if (event.type == AudioInterruptionType.pause && playing) {
             _resumeAfterInterruption = true;
             unawaited(player.pause());
@@ -170,10 +181,71 @@ class PlayerController extends ChangeNotifier {
         }
         if (event.type == AudioInterruptionType.pause && _resumeAfterInterruption) {
           _resumeAfterInterruption = false;
-          unawaited(player.play());
+          unawaited(resumePlayback());
         }
       });
     } catch (_) {}
+  }
+
+  Future<void> resumePlayback({Duration? limit}) async {
+    _userPaused = false;
+    _ignoreFocusUntil = DateTime.now().add(const Duration(seconds: 2));
+    // just_audio's play() future only completes on pause/stop, not when
+    // sound starts. Awaiting it (or timing it out at 4s) left the clock
+    // running in silence until the timeout, then the volume fade kicked in.
+    unawaited(player.play());
+  }
+
+  Duration _heldPosition() {
+    final live = player.position;
+    if (live.inMilliseconds >= 400) return live;
+    return _lastPosition;
+  }
+
+  /// ExoPlayer sometimes reports "completed" on pause. Trust the clock, not
+  /// that flag, otherwise a pause in the middle restarts the track.
+  bool _actuallyFinished() {
+    if (_userPaused) return false;
+    final pos = _heldPosition().inMilliseconds;
+    final live = player.duration?.inMilliseconds ?? 0;
+    final tagged = current?.durationMs ?? 0;
+    final duration = live > tagged ? live : tagged;
+    if (duration <= 1000) return false;
+    return pos >= duration - 1500;
+  }
+
+  void flushListenStats() => _flushListenClock();
+
+  void discardListenClock() {
+    _listenAnchorMs = null;
+  }
+
+  void resumeListenClock() {
+    if (playing) _beginListenClock();
+  }
+
+  void _beginListenClock() {
+    if (!settings.statsEnabled) {
+      _listenAnchorMs = null;
+      return;
+    }
+    try {
+      _listenAnchorMs = player.position.inMilliseconds;
+    } catch (_) {
+      _listenAnchorMs = 0;
+    }
+  }
+
+  void _flushListenClock() {
+    final start = _listenAnchorMs;
+    _listenAnchorMs = null;
+    if (!settings.statsEnabled || start == null) return;
+    var now = start;
+    try {
+      now = player.position.inMilliseconds;
+    } catch (_) {}
+    final delta = now - start;
+    if (delta >= 500) unawaited(library.addListenMs(delta));
   }
 
   Future<void> playTracks(List<Track> tracks, {int start = 0}) async {
@@ -197,20 +269,14 @@ class PlayerController extends ChangeNotifier {
     notifyListeners();
   }
 
-  bool _isNearEnd() {
-    final duration = player.duration;
-    final position = player.position;
-    if (duration == null || duration.inMilliseconds <= 0) {
-      return position.inMilliseconds > 1500;
-    }
-    return position >= duration - const Duration(milliseconds: 1200);
-  }
-
   Future<void> playPause() async {
     _resumeAfterInterruption = false;
     if (!hasTrack) return;
-    final isPlaying = playing || player.playing;
-    if (isPlaying) {
+    if (playing || player.playing) {
+      _userPaused = true;
+      _resumeAfterInterruption = false;
+      _lastPosition = _heldPosition();
+      _ignoreFocusUntil = DateTime.now().add(const Duration(seconds: 2));
       if (settings.pauseFade) {
         await _fadeVolume(0, const Duration(milliseconds: 300));
         await player.pause();
@@ -221,27 +287,20 @@ class PlayerController extends ChangeNotifier {
       return;
     }
     if (_loadedPath != current!.path) {
-      await _loadCurrent(play: true);
+      await _loadCurrent(play: true, position: _heldPosition());
       return;
     }
-    if (player.processingState == ProcessingState.completed) {
-      if (_isNearEnd()) {
-        await _loadCurrent(play: true);
-      } else {
-        try {
-          await player.seek(player.position);
-        } catch (_) {}
-        await player.play();
-      }
+    if (player.processingState == ProcessingState.idle) {
+      await _loadCurrent(play: true, position: _heldPosition());
       return;
     }
     if (settings.pauseFade) {
       await player.setVolume(0);
-      await player.play();
+      await resumePlayback();
       await _fadeVolume(settings.volume, const Duration(milliseconds: 300));
       return;
     }
-    await player.play();
+    await resumePlayback();
   }
 
   Future<void> next() => _skipTo(_nextIndex());
@@ -251,23 +310,29 @@ class PlayerController extends ChangeNotifier {
       await _loadIndex(_history.removeLast(), play: playing || _loadedPath != null, recordHistory: false);
       return;
     }
-    await _skipTo(_previousIndex());
+    await _skipTo(_previousIndex(), recordHistory: false);
   }
 
-  Future<void> _skipTo(int? nextIndex) async {
+  /// Going back must not push the track we came from, otherwise the next
+  /// press of previous would jump forward to it again.
+  Future<void> _skipTo(int? nextIndex, {bool recordHistory = true}) async {
     if (nextIndex == null) return;
     if (settings.crossfade && playing) {
       await _fadeVolume(0, const Duration(milliseconds: 400));
-      await _loadIndex(nextIndex, play: true);
+      await _loadIndex(nextIndex, play: true, recordHistory: recordHistory);
       await player.setVolume(0);
-      await player.play();
+      await resumePlayback();
       await _fadeVolume(settings.volume, const Duration(milliseconds: 400));
       return;
     }
-    await _loadIndex(nextIndex, play: playing || _loadedPath != null);
+    await _loadIndex(nextIndex, play: playing || _loadedPath != null, recordHistory: recordHistory);
   }
 
-  Future<void> seek(Duration position) => player.seek(position);
+  Future<void> seek(Duration position) async {
+    _flushListenClock();
+    await player.seek(position);
+    if (playing) _beginListenClock();
+  }
 
   Future<void> playNext(Track track) async {
     if (!hasTrack) {
@@ -327,6 +392,19 @@ class PlayerController extends ChangeNotifier {
     try {
       await player.setPitch(settings.pitch);
     } catch (_) {}
+  }
+
+  /// Drop the current file handle without waiting on ExoPlayer.
+  void releaseFileHandle() {
+    _loadedPath = null;
+    unawaited(() async {
+      try {
+        await player.pause().timeout(const Duration(milliseconds: 200));
+      } catch (_) {}
+      try {
+        await player.stop().timeout(const Duration(milliseconds: 200));
+      } catch (_) {}
+    }());
   }
 
   /// Release the file so tags can be rewritten without killing playback.
@@ -394,15 +472,38 @@ class PlayerController extends ChangeNotifier {
     await _loadCurrent(play: play, position: position);
   }
 
-  Future<void> removePath(String path) async {
+  /// [resume] carries the playing state from before the caller paused to let
+  /// go of the file. Without it, deleting the current track always lands on a
+  /// silent player.
+  Future<void> removePath(String path, {bool? resume}) async {
     final at = queue.indexWhere((track) => track.path == path);
     if (at < 0) return;
+    final keepPlaying = resume ?? (playing || player.playing);
     if (queue.length == 1) {
-      await player.stop();
-      queue = [];
+      // Dropping the only queued track used to empty the player, leaving
+      // nothing to resume until the app was restarted. Carry on with the
+      // library instead, and only stop when there is truly nothing left.
+      final rest = [
+        for (final track in library.songs)
+          if (track.path != path) track,
+      ];
+      if (rest.isEmpty) {
+        await player.stop();
+        queue = [];
+        index = 0;
+        _loadedPath = null;
+        unawaited(_persistSession());
+        // The notification is pushed from the playing stream, so it still held
+        // the removed track and its play button led nowhere.
+        _pushSession();
+        notifyListeners();
+        return;
+      }
+      queue = rest;
       index = 0;
-      _loadedPath = null;
+      _history.clear();
       notifyListeners();
+      await _loadCurrent(play: keepPlaying);
       return;
     }
     final wasCurrent = at == index;
@@ -423,7 +524,9 @@ class PlayerController extends ChangeNotifier {
     );
     notifyListeners();
     if (wasCurrent) {
-      await _loadCurrent(play: playing);
+      await _loadCurrent(play: keepPlaying);
+    } else {
+      unawaited(_persistSession());
     }
   }
 
@@ -497,8 +600,10 @@ class PlayerController extends ChangeNotifier {
   Future<void> _loadCurrent({required bool play, Duration position = Duration.zero}) async {
     final track = current;
     if (track == null) return;
+    _flushListenClock();
     final gen = ++_loadGen;
     _loading = true;
+    _lastPosition = position;
     try {
       String playPath = track.path;
       try {
@@ -562,7 +667,7 @@ class PlayerController extends ChangeNotifier {
           await player.seek(position).timeout(const Duration(seconds: 2));
         } catch (_) {}
       }
-      if (play) await player.play().timeout(const Duration(seconds: 3));
+      if (play) await resumePlayback();
     } catch (_) {
       if (gen != _loadGen) return;
       _loadedPath = null;
@@ -572,12 +677,13 @@ class PlayerController extends ChangeNotifier {
     if (gen != _loadGen) return;
     if (track.path != _lastCountedPath) {
       _lastCountedPath = track.path;
-      unawaited(library.markPlayed(track.path));
+      if (settings.statsEnabled) unawaited(library.markPlayed(track.path));
     }
     unawaited(_extractColor());
     unawaited(_persistSession());
     _pushSession();
     notifyListeners();
+    if (play || playing) _beginListenClock();
   }
 
   int? _nextIndex() {
@@ -605,11 +711,26 @@ class PlayerController extends ChangeNotifier {
 
   Future<void> _onCompleted() async {
     if (_handlingComplete || _loading || _fileEdit != null) return;
+    if (_userPaused || !_actuallyFinished()) {
+      // Pause (and some focus glitches) can emit "completed" with the playhead
+      // still in the middle. Restarting would both jump to 0:00 and, after a
+      // stop(), leave ExoPlayer silent until the app is killed.
+      if (_userPaused) {
+        final restore = _lastPosition;
+        if (restore.inMilliseconds > 400 && player.position.inMilliseconds < 400) {
+          try {
+            await player.seek(restore).timeout(const Duration(milliseconds: 400));
+          } catch (_) {}
+        }
+      }
+      return;
+    }
     _handlingComplete = true;
     try {
       if (_stopAfterTrack) {
         _stopAfterTrack = false;
         sleepKind = SleepKind.off;
+        _userPaused = true;
         await player.pause();
         notifyListeners();
         return;
@@ -617,17 +738,16 @@ class PlayerController extends ChangeNotifier {
       if (repeat == RepeatKind.one) {
         try {
           await player.seek(Duration.zero).timeout(const Duration(milliseconds: 400));
-          await player.play().timeout(const Duration(milliseconds: 400));
+          _lastPosition = Duration.zero;
+          await resumePlayback(limit: const Duration(milliseconds: 800));
           if (player.processingState != ProcessingState.completed) return;
-        } catch (_) {}
-        try {
-          await player.stop().timeout(const Duration(milliseconds: 300));
         } catch (_) {}
         await _loadCurrent(play: true);
         return;
       }
       final nextIndex = _nextIndex();
       if (nextIndex == null) {
+        _userPaused = true;
         await player.pause();
         notifyListeners();
         return;
@@ -739,6 +859,7 @@ class PlayerController extends ChangeNotifier {
 
   @override
   void dispose() {
+    _flushListenClock();
     _sleepTimer?.cancel();
     unawaited(_noisySub?.cancel());
     unawaited(_interruptSub?.cancel());

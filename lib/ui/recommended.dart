@@ -12,7 +12,9 @@ import 'now_playing.dart';
 import 'widgets.dart';
 
 class RecommendedTab extends StatelessWidget {
-  const RecommendedTab({super.key});
+  const RecommendedTab({super.key, required this.onRefresh});
+
+  final Future<void> Function() onRefresh;
 
   @override
   Widget build(BuildContext context) {
@@ -28,11 +30,27 @@ class RecommendedTab extends StatelessWidget {
     final added = library.recentlyAddedTracks.take(10).toList();
 
     if (recentlyPlayed.isEmpty && popular.isEmpty && favorites.isEmpty && added.isEmpty) {
-      return Center(child: Text(s.playToFill));
+      return RefreshIndicator(
+        onRefresh: onRefresh,
+        child: LayoutBuilder(
+          builder: (context, constraints) {
+            return SingleChildScrollView(
+              physics: const AlwaysScrollableScrollPhysics(),
+              child: SizedBox(
+                height: constraints.maxHeight,
+                child: Center(child: Text(s.playToFill)),
+              ),
+            );
+          },
+        ),
+      );
     }
 
-    return ListView(
+    return RefreshIndicator(
+      onRefresh: onRefresh,
+      child: ListView(
       padding: const EdgeInsets.only(bottom: 88),
+      physics: const AlwaysScrollableScrollPhysics(),
       children: [
         if (recentlyPlayed.isNotEmpty)
           _CarouselSection(
@@ -68,6 +86,7 @@ class RecommendedTab extends StatelessWidget {
             _AddedTile(track: added[i], queue: added, index: i),
         ],
       ],
+    ),
     );
   }
 
