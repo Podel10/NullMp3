@@ -53,6 +53,8 @@ class _BeatHaloState extends State<BeatHalo> with SingleTickerProviderStateMixin
   int _rimGen = 0;
   int _artGen = -1;
   bool _live = false;
+  DateTime? _lastDataAt;
+  DateTime? _restartAt;
   List<Color> _rim = const [];
 
   Timer? _startTimer;
@@ -67,6 +69,7 @@ class _BeatHaloState extends State<BeatHalo> with SingleTickerProviderStateMixin
     if (!kIsWeb && defaultTargetPlatform == TargetPlatform.android) {
       _sub = _events.receiveBroadcastStream().listen(_onData, onError: (_) {
         _live = false;
+        if (widget.playing && widget.enabled) _scheduleCapture();
       });
     }
     _scheduleCapture();
@@ -90,7 +93,7 @@ class _BeatHaloState extends State<BeatHalo> with SingleTickerProviderStateMixin
     }
     if (oldWidget.enabled != widget.enabled || oldWidget.playing != widget.playing) {
       if (!widget.enabled || !widget.playing) {
-        unawaited(_stopCapture());
+        _live = false;
       }
       _scheduleCapture();
     }
@@ -105,7 +108,6 @@ class _BeatHaloState extends State<BeatHalo> with SingleTickerProviderStateMixin
   void dispose() {
     _startTimer?.cancel();
     ArtworkStore.instance.removeListener(_onArtwork);
-    unawaited(_stopCapture());
     _sub?.cancel();
     _sessionSub?.cancel();
     _ticker.dispose();
@@ -144,21 +146,23 @@ class _BeatHaloState extends State<BeatHalo> with SingleTickerProviderStateMixin
     if (widget.playing && widget.enabled) _scheduleCapture();
   }
 
-  void _scheduleCapture() {
+  void _scheduleCapture({bool force = false}) {
     _startTimer?.cancel();
     if (!widget.enabled || !widget.playing) {
-      unawaited(_stopCapture());
+      _live = false;
       return;
     }
-    if (_live) return;
-    _startTimer = Timer(const Duration(milliseconds: 500), () {
-      if (!mounted || !widget.playing || !widget.enabled || _live) return;
-      unawaited(_syncCapture());
+    if (!force && _live) return;
+    _startTimer = Timer(Duration(milliseconds: force ? 80 : 500), () {
+      if (!mounted || !widget.playing || !widget.enabled) return;
+      if (!force && _live) return;
+      unawaited(_syncCapture(force: force));
     });
   }
 
   void _onTick(Duration _) {
     if (!mounted) return;
+    _maybeRestartCapture();
     final decayPulse = _pulse > 0.002;
     final idle = !widget.playing && (_energy > 0.002 || _bass > 0.002);
     if (!decayPulse && !idle) return;
@@ -175,31 +179,43 @@ class _BeatHaloState extends State<BeatHalo> with SingleTickerProviderStateMixin
     });
   }
 
-  Future<void> _syncCapture() async {
+  void _maybeRestartCapture() {
+    if (!widget.playing || !widget.enabled) return;
+    final now = DateTime.now();
+    if (_restartAt != null && now.difference(_restartAt!) < const Duration(seconds: 3)) return;
+    final last = _lastDataAt;
+    final stale = last == null
+        ? _live && _restartAt != null && now.difference(_restartAt!) > const Duration(seconds: 2)
+        : now.difference(last) > const Duration(seconds: 2);
+    if (!stale) return;
+    _live = false;
+    _scheduleCapture(force: true);
+  }
+
+  Future<void> _syncCapture({bool force = false}) async {
     final gen = ++_syncGen;
     if (kIsWeb || !widget.enabled || !widget.playing) {
       return;
     }
-    if (_live) return;
+    if (!force && _live) return;
     final id = _sessionId ?? widget.sessionId;
     if (id == null || id <= 0) return;
     final allowed = await _ensureMic();
     if (!mounted || gen != _syncGen) return;
     if (!allowed) return;
     try {
-      final ok = await _methods.invokeMethod<bool>('start', {'sessionId': id}) ?? false;
+      final ok = await _methods.invokeMethod<bool>('start', {
+            'sessionId': id,
+            'force': force,
+          }) ??
+          false;
       if (!mounted || gen != _syncGen) return;
       _live = ok;
+      _restartAt = DateTime.now();
+      if (force) _lastDataAt = null;
     } catch (_) {
       _live = false;
     }
-  }
-
-  Future<void> _stopCapture() async {
-    _live = false;
-    try {
-      await _methods.invokeMethod<void>('stop');
-    } catch (_) {}
   }
 
   Future<bool> _ensureMic() async {
@@ -219,6 +235,8 @@ class _BeatHaloState extends State<BeatHalo> with SingleTickerProviderStateMixin
     if (raw is! Map) return;
     final peaks = raw['peaks'];
     if (peaks is! List || peaks.isEmpty) return;
+    _lastDataAt = DateTime.now();
+    _live = true;
     final next = <double>[
       for (final item in peaks) (item as num).toDouble().clamp(0.0, 1.0),
     ];

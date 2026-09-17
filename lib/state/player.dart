@@ -891,6 +891,9 @@ class PlayerController extends ChangeNotifier {
     unawaited(_noisySub?.cancel());
     unawaited(_interruptSub?.cancel());
     player.dispose();
+    if (!kIsWeb && defaultTargetPlatform == TargetPlatform.android) {
+      unawaited(const MethodChannel('com.nullmp3.nullmp3/halo').invokeMethod<void>('stop'));
+    }
     super.dispose();
   }
 }
