@@ -9,6 +9,7 @@ import 'package:flutter/services.dart';
 import 'package:permission_handler/permission_handler.dart';
 
 import '../data/artwork.dart';
+import '../data/cover_rim.dart';
 
 class BeatHalo extends StatefulWidget {
   const BeatHalo({
@@ -58,6 +59,13 @@ class _BeatHaloState extends State<BeatHalo>
   DateTime? _lastDataAt;
   DateTime? _restartAt;
   List<Color> _rim = const [];
+  CoverRimSequence _rimLoop = CoverRimSequence.empty;
+  bool _rimLive = false;
+  bool _rimFromCover = false;
+  int? _coverFrame;
+  Duration _rimFrozen = Duration.zero;
+  Stopwatch? _rimClock;
+  StreamSubscription<CoverRimLiveFrame>? _rimLiveSub;
 
   Timer? _startTimer;
 
@@ -69,6 +77,7 @@ class _BeatHaloState extends State<BeatHalo>
     _ticker = createTicker(_onTick)..start();
     _sessionSub = widget.sessionIds?.listen(_onSession);
     ArtworkStore.instance.addListener(_onArtwork);
+    _rimLiveSub = CoverRimLive.instance.stream.listen(_onLiveRim);
     if (!kIsWeb && defaultTargetPlatform == TargetPlatform.android) {
       _sub = _events.receiveBroadcastStream().listen(_onData, onError: (_) {
         _live = false;
@@ -121,6 +130,11 @@ class _BeatHaloState extends State<BeatHalo>
       }
       _scheduleCapture();
     }
+    if (oldWidget.playing != widget.playing) _syncRimClock();
+    if (oldWidget.artworkPath != widget.artworkPath) {
+      _coverFrame = null;
+      _rimFromCover = false;
+    }
     if (oldWidget.artworkPath != widget.artworkPath ||
         oldWidget.circle != widget.circle ||
         oldWidget.enabled != widget.enabled) {
@@ -135,6 +149,8 @@ class _BeatHaloState extends State<BeatHalo>
     ArtworkStore.instance.removeListener(_onArtwork);
     _sub?.cancel();
     _sessionSub?.cancel();
+    _rimLiveSub?.cancel();
+    _rimClock?.stop();
     _ticker.dispose();
     super.dispose();
   }
@@ -152,15 +168,71 @@ class _BeatHaloState extends State<BeatHalo>
     final path = widget.artworkPath;
     if (!widget.enabled || path == null || path.isEmpty) {
       _artGen = -1;
+      _rimLoop = CoverRimSequence.empty;
+      _rimLive = false;
+      _rimFromCover = false;
+      _coverFrame = null;
+      _resetRimClock();
       if (_rim.isNotEmpty && mounted) setState(() => _rim = const []);
       return;
     }
     _artGen = ArtworkStore.instance.generationOf(path);
     final bytes = await ArtworkStore.instance.get(path);
     if (!mounted || gen != _rimGen) return;
-    final rim = await _sampleCoverRim(bytes, circle: widget.circle);
+    final sequence = await sampleCoverRimSequence(bytes, circle: widget.circle);
     if (!mounted || gen != _rimGen) return;
-    setState(() => _rim = rim);
+    _rimLoop = sequence;
+    _rimLive = false;
+    _rimFromCover = false;
+    _resetRimClock();
+    setState(() => _rim = sequence.first);
+    if (_coverFrame != null) _applyCoverFrame(_coverFrame!);
+    _syncRimClock();
+  }
+
+  void _onCoverMotion(CoverMotionNotification note) {
+    if (!widget.enabled) return;
+    _coverFrame = note.index;
+    _rimFromCover = true;
+    _syncRimClock();
+    _applyCoverFrame(note.index);
+  }
+
+  void _applyCoverFrame(int index) {
+    final frames = _rimLoop.frames;
+    if (frames.isEmpty) return;
+    final colors = frames[index % frames.length].colors;
+    if (sameRim(_rim, colors)) return;
+    setState(() => _rim = colors);
+  }
+
+  void _onLiveRim(CoverRimLiveFrame frame) {
+    if (!widget.enabled) return;
+    if (frame.path != widget.artworkPath) return;
+    if (sameRim(_rim, frame.colors)) return;
+    _rimLive = true;
+    setState(() => _rim = frame.colors);
+  }
+
+  Duration get _rimElapsed => _rimFrozen + (_rimClock?.elapsed ?? Duration.zero);
+
+  void _resetRimClock() {
+    _rimClock?.stop();
+    _rimClock = null;
+    _rimFrozen = Duration.zero;
+  }
+
+  void _syncRimClock() {
+    final run = widget.enabled && widget.playing && _rimLoop.isAnimated && !_rimLive && !_rimFromCover;
+    if (run) {
+      _rimClock ??= Stopwatch()..start();
+      return;
+    }
+    final clock = _rimClock;
+    if (clock == null) return;
+    _rimFrozen += clock.elapsed;
+    clock.stop();
+    _rimClock = null;
   }
 
   void _onSession(int? id) {
@@ -188,9 +260,18 @@ class _BeatHaloState extends State<BeatHalo>
   void _onTick(Duration _) {
     if (!mounted) return;
     _maybeRestartCapture();
+    _syncRimClock();
+    var rimChanged = false;
+    if (_rimLoop.isAnimated && !_rimLive && !_rimFromCover) {
+      final next = _rimLoop.at(_rimElapsed);
+      if (!sameRim(next, _rim)) {
+        _rim = next;
+        rimChanged = true;
+      }
+    }
     final decayPulse = _pulse > 0.002;
     final idle = !widget.playing && (_energy > 0.002 || _bass > 0.002);
-    if (!decayPulse && !idle) return;
+    if (!rimChanged && !decayPulse && !idle) return;
     setState(() {
       if (decayPulse) _pulse *= 0.88;
       if (idle) {
@@ -335,7 +416,12 @@ class _BeatHaloState extends State<BeatHalo>
       bass: _bass,
       pulse: _pulse,
       playing: widget.playing,
-      child: Stack(
+      child: NotificationListener<CoverMotionNotification>(
+        onNotification: (note) {
+          _onCoverMotion(note);
+          return false;
+        },
+        child: Stack(
         fit: StackFit.expand,
         clipBehavior: Clip.none,
         children: [
@@ -358,6 +444,7 @@ class _BeatHaloState extends State<BeatHalo>
           ),
           widget.child,
         ],
+        ),
       ),
     );
   }
@@ -726,119 +813,6 @@ class _Edge {
   final Offset normal;
 }
 
-const _rimBands = 16;
-
-/// Reads the colours around the edge of the cover once per artwork, so the
-/// halo can be tinted per direction without touching pixels while painting.
-Future<List<Color>> _sampleCoverRim(Uint8List? bytes, {required bool circle}) async {
-  if (bytes == null || bytes.length < 32) return const [];
-  try {
-    final codec = await instantiateImageCodec(bytes, targetWidth: 96);
-    final frame = await codec.getNextFrame();
-    final image = frame.image;
-    try {
-      final width = image.width;
-      final height = image.height;
-      if (width < 8 || height < 8) return const [];
-      final data = await image.toByteData(format: ImageByteFormat.rawRgba);
-      if (data == null) return const [];
-      final pixels = data.buffer.asUint8List();
-      final rim = <Color>[];
-      for (var i = 0; i < _rimBands; i++) {
-        rim.add(_rimColorAlongRay(pixels, width, height, i / _rimBands, circle));
-      }
-      return rim;
-    } finally {
-      image.dispose();
-    }
-  } catch (_) {
-    return const [];
-  }
-}
-
-/// Angle `t` runs clockwise from the top, matching [_HaloPainter._sample].
-Offset _rimPoint(double t, double width, double height, bool circle, [double inset = 0.82]) {
-  final center = Offset(width / 2, height / 2);
-  final angle = t * math.pi * 2 - math.pi / 2;
-  final dir = Offset(math.cos(angle), math.sin(angle));
-  final halfW = width / 2;
-  final halfH = height / 2;
-  final double reach;
-  if (circle) {
-    reach = math.min(halfW, halfH);
-  } else {
-    final byX = dir.dx.abs() < 1e-4 ? double.infinity : halfW / dir.dx.abs();
-    final byY = dir.dy.abs() < 1e-4 ? double.infinity : halfH / dir.dy.abs();
-    reach = math.min(byX, byY);
-  }
-  return center + dir * reach * inset;
-}
-
-Color _rimColorAlongRay(Uint8List rgba, int width, int height, double t, bool circle) {
-  Color? best;
-  var bestScore = -1.0;
-  for (final inset in const [0.9, 0.76, 0.6, 0.44, 0.28]) {
-    final sample = _rimColorAt(rgba, width, height, _rimPoint(t, width.toDouble(), height.toDouble(), circle, inset));
-    final score = _coverColorScore(sample);
-    if (score > bestScore) {
-      bestScore = score;
-      best = sample;
-    }
-    if (score >= 0.2) break;
-  }
-  return _haloTint(best ?? const Color(0xFF7A8086));
-}
-
-Color _rimColorAt(Uint8List rgba, int width, int height, Offset point) {
-  var r = 0;
-  var g = 0;
-  var b = 0;
-  var count = 0;
-  final cx = point.dx.round();
-  final cy = point.dy.round();
-  for (var dy = -1; dy <= 1; dy++) {
-    for (var dx = -1; dx <= 1; dx++) {
-      final x = (cx + dx).clamp(0, width - 1);
-      final y = (cy + dy).clamp(0, height - 1);
-      final i = (y * width + x) * 4;
-      if (rgba[i + 3] < 8) continue;
-      r += rgba[i];
-      g += rgba[i + 1];
-      b += rgba[i + 2];
-      count++;
-    }
-  }
-  if (count == 0) return const Color(0xFF7A8086);
-  return Color.fromARGB(255, r ~/ count, g ~/ count, b ~/ count);
-}
-
-double _coverChroma(Color color) {
-  final maxC = math.max(color.r, math.max(color.g, color.b));
-  final minC = math.min(color.r, math.min(color.g, color.b));
-  return maxC - minC;
-}
-
-double _coverColorScore(Color color) {
-  final chroma = _coverChroma(color);
-  final light = HSLColor.fromColor(color).lightness;
-  if (light < 0.06 || light > 0.94 || chroma < 0.05) return chroma * 0.15;
-  return chroma * (1.0 - (light - 0.45).abs());
-}
-
-/// Keeps the cover hue only when the sample is a real colour. Near-black
-/// JPEG noise otherwise becomes a fake blue or purple once it is brightened.
-Color _haloTint(Color base) {
-  final hsl = HSLColor.fromColor(base);
-  if (hsl.lightness < 0.07 || _coverChroma(base) < 0.06) {
-    return const Color(0xFF7A8086);
-  }
-  return hsl
-      .withSaturation((hsl.saturation * 1.06).clamp(0.0, 0.86).toDouble())
-      .withLightness((hsl.lightness * 0.5 + 0.34).clamp(0.3, 0.76).toDouble())
-      .toColor();
-}
-
-/// Ring of cover colours as an angular shader, first colour at the top.
 Shader? _rimSweep(List<Color> rim, Rect rect, double alpha) {
   if (rim.length < 2 || rect.isEmpty) return null;
   final a = alpha.clamp(0.0, 1.0).toDouble();

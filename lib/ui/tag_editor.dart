@@ -403,7 +403,7 @@ class _TagEditorSheetState extends State<TagEditorSheet> {
             color: Color(0xFF3A4A56),
             child: Icon(Icons.music_note, color: Colors.white54, size: 56),
           )
-        : CoverBytesView(bytes: _cover!, fit: BoxFit.cover, animate: true);
+        : CoverBytesView(bytes: _cover!, fit: BoxFit.cover, animate: true, playing: true);
     if (_coverShape == CoverShape.circle) {
       return ClipOval(child: art);
     }

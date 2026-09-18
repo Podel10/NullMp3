@@ -114,6 +114,8 @@ class _CoverArtState extends State<CoverArt> {
               fit: BoxFit.cover,
               animate: widget.animate,
               playing: playing,
+              live: widget.animate,
+              artworkPath: widget.track?.path,
               filterQuality: widget.expand ? FilterQuality.medium : FilterQuality.low,
               cacheWidth: ((widget.expand ? 420 : widget.size) *
                       (MediaQuery.maybeDevicePixelRatioOf(context) ?? 2))
@@ -128,18 +130,18 @@ class _CoverArtState extends State<CoverArt> {
             borderRadius: BorderRadius.circular(widget.radius),
             child: child,
           );
-    if (widget.softEdge) {
+    if (widget.softEdge && circle) {
       child = ShaderMask(
         blendMode: BlendMode.dstIn,
         shaderCallback: (bounds) {
-          return RadialGradient(
-            colors: const [
+          return const RadialGradient(
+            colors: [
               Color(0xFFFFFFFF),
               Color(0xFFFFFFFF),
               Color(0xB3FFFFFF),
               Color(0x00FFFFFF),
             ],
-            stops: circle ? const [0.0, 0.76, 0.88, 1.0] : const [0.0, 0.82, 0.92, 1.0],
+            stops: [0.0, 0.76, 0.88, 1.0],
           ).createShader(bounds);
         },
         child: child,

@@ -1,10 +1,18 @@
 import 'dart:async';
-import 'dart:typed_data';
+import 'dart:io';
+import 'dart:math' as math;
 import 'dart:ui' as ui;
 
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/rendering.dart';
+import 'package:path/path.dart' as p;
+import 'package:path_provider/path_provider.dart';
+import 'package:video_player/video_player.dart';
 
+import '../data/artwork.dart';
 import '../data/cover_image.dart';
+import '../data/cover_rim.dart';
 
 class CoverBytesView extends StatelessWidget {
   const CoverBytesView({
@@ -16,6 +24,8 @@ class CoverBytesView extends StatelessWidget {
     this.errorBuilder,
     this.animate = false,
     this.playing = true,
+    this.live,
+    this.artworkPath,
   });
 
   final Uint8List bytes;
@@ -25,12 +35,28 @@ class CoverBytesView extends StatelessWidget {
   final ImageErrorWidgetBuilder? errorBuilder;
   final bool animate;
   final bool playing;
+  final bool? live;
+  final String? artworkPath;
 
   @override
   Widget build(BuildContext context) {
     if (isVideoBytes(bytes)) {
-      return errorBuilder?.call(context, 'video', StackTrace.empty) ??
-          const ColoredBox(color: Color(0xFF3A4A56));
+      final playVideo = live ?? animate;
+      if (!playVideo || kIsWeb) {
+        return errorBuilder?.call(context, 'video', StackTrace.empty) ??
+            const ColoredBox(
+              color: Color(0xFF3A4A56),
+              child: Icon(Icons.movie_outlined, color: Colors.white54),
+            );
+      }
+      return _VideoCover(
+        bytes: bytes,
+        fit: fit,
+        playing: playing,
+        animate: animate,
+        artworkPath: artworkPath,
+        errorBuilder: errorBuilder,
+      );
     }
     if (isGifBytes(bytes) || isWebpBytes(bytes)) {
       if (animate) {
@@ -105,8 +131,6 @@ class _StillRasterCoverState extends State<_StillRasterCover> {
   Future<void> _decode() async {
     final token = Object();
     _token = token;
-    _image?.dispose();
-    _image = null;
     _failed = false;
     try {
       final codec = await ui.instantiateImageCodec(
@@ -119,7 +143,9 @@ class _StillRasterCoverState extends State<_StillRasterCover> {
         frame.image.dispose();
         return;
       }
+      final previous = _image;
       setState(() => _image = frame.image);
+      WidgetsBinding.instance.addPostFrameCallback((_) => previous?.dispose());
     } catch (_) {
       if (mounted && identical(_token, token)) setState(() => _failed = true);
     }
@@ -166,6 +192,8 @@ class _AnimatedRasterCoverState extends State<_AnimatedRasterCover> {
   Object? _token;
   Completer<void>? _resume;
   var _failed = false;
+  var _index = -1;
+  Duration _hold = const Duration(milliseconds: 33);
 
   @override
   void initState() {
@@ -211,9 +239,8 @@ class _AnimatedRasterCoverState extends State<_AnimatedRasterCover> {
     _wake();
     _codec?.dispose();
     _codec = null;
-    _image?.dispose();
-    _image = null;
     _failed = false;
+    _index = -1;
     try {
       final codec = await ui.instantiateImageCodec(widget.bytes);
       if (!mounted || !identical(_token, token)) {
@@ -222,9 +249,14 @@ class _AnimatedRasterCoverState extends State<_AnimatedRasterCover> {
       }
       _codec = codec;
       await _showNext(token);
-      if (codec.frameCount > 1) unawaited(_loop(token));
+      if (math.max(1, codec.frameCount) > 1) unawaited(_loop(token));
     } catch (_) {
-      if (mounted && identical(_token, token)) setState(() => _failed = true);
+      if (mounted && identical(_token, token)) {
+        final previous = _image;
+        _image = null;
+        setState(() => _failed = true);
+        WidgetsBinding.instance.addPostFrameCallback((_) => previous?.dispose());
+      }
     }
   }
 
@@ -236,31 +268,56 @@ class _AnimatedRasterCoverState extends State<_AnimatedRasterCover> {
       next.image.dispose();
       return;
     }
+    _applyFrame(next, token);
+  }
+
+  void _applyFrame(ui.FrameInfo next, Object token) {
+    // GIF delay 0–1 cs is "as fast as possible"; keep 2 cs (50 fps) and 3 cs (30 fps).
+    var hold = next.duration;
+    if (hold.inMilliseconds < 20) hold = const Duration(milliseconds: 100);
+    _hold = hold;
+    final count = math.max(1, _codec?.frameCount ?? 1);
+    _index = (_index + 1) % count;
     final previous = _image;
     _image = next.image;
-    setState(() {});
-    previous?.dispose();
+    if (mounted) setState(() {});
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      previous?.dispose();
+      if (!mounted || !identical(_token, token)) return;
+      CoverMotionNotification(index: _index, count: count).dispatch(context);
+    });
   }
 
   Future<void> _loop(Object token) async {
     while (mounted && identical(_token, token)) {
       await _waitWhilePaused();
       if (!mounted || !identical(_token, token)) return;
-      if (!widget.playing) continue;
       final codec = _codec;
       if (codec == null) return;
-      final next = await codec.getNextFrame();
-      var wait = next.duration;
-      if (wait.inMilliseconds < 20) wait = const Duration(milliseconds: 80);
-      if (!mounted || !identical(_token, token) || !widget.playing) {
-        next.image.dispose();
-        continue;
+      final pending = codec.getNextFrame();
+      await _delayWhilePlaying(_hold);
+      final ui.FrameInfo next;
+      try {
+        next = await pending;
+      } catch (_) {
+        return;
       }
-      final previous = _image;
-      _image = next.image;
-      setState(() {});
-      previous?.dispose();
-      await Future<void>.delayed(wait);
+      if (!mounted || !identical(_token, token)) {
+        next.image.dispose();
+        return;
+      }
+      _applyFrame(next, token);
+    }
+  }
+
+  Future<void> _delayWhilePlaying(Duration wait) async {
+    if (wait <= Duration.zero) return;
+    final end = DateTime.now().add(wait);
+    while (mounted && widget.playing && DateTime.now().isBefore(end)) {
+      var slice = end.difference(DateTime.now());
+      if (slice.inMilliseconds > 32) slice = const Duration(milliseconds: 32);
+      if (slice.inMilliseconds <= 0) return;
+      await Future<void>.delayed(slice);
     }
   }
 
@@ -279,5 +336,206 @@ class _AnimatedRasterCoverState extends State<_AnimatedRasterCover> {
       height: double.infinity,
       filterQuality: FilterQuality.medium,
     );
+  }
+}
+
+class _VideoCover extends StatefulWidget {
+  const _VideoCover({
+    required this.bytes,
+    required this.fit,
+    required this.playing,
+    required this.animate,
+    this.artworkPath,
+    this.errorBuilder,
+  });
+
+  final Uint8List bytes;
+  final BoxFit fit;
+  final bool playing;
+  final bool animate;
+  final String? artworkPath;
+  final ImageErrorWidgetBuilder? errorBuilder;
+
+  @override
+  State<_VideoCover> createState() => _VideoCoverState();
+}
+
+class _VideoCoverState extends State<_VideoCover> {
+  final GlobalKey _bound = GlobalKey();
+  VideoPlayerController? _player;
+  Object? _token;
+  Timer? _rimTimer;
+  var _failed = false;
+  var _rimBusy = false;
+  var _primed = false;
+
+  @override
+  void initState() {
+    super.initState();
+    unawaited(_open());
+  }
+
+  @override
+  void didUpdateWidget(covariant _VideoCover oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (!identical(oldWidget.bytes, widget.bytes) || oldWidget.artworkPath != widget.artworkPath) {
+      unawaited(_open());
+      return;
+    }
+    unawaited(_syncPlayback());
+    _tuneRimTimer();
+  }
+
+  @override
+  void dispose() {
+    _token = null;
+    _rimTimer?.cancel();
+    _rimTimer = null;
+    final player = _player;
+    _player = null;
+    player?.dispose();
+    super.dispose();
+  }
+
+  Future<void> _open() async {
+    final token = Object();
+    _token = token;
+    _rimTimer?.cancel();
+    _rimTimer = null;
+    final old = _player;
+    _player = null;
+    if (mounted) setState(() {});
+    if (old != null) {
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        old.dispose();
+      });
+    }
+    _failed = false;
+    _primed = false;
+    try {
+      final file = await _videoFile(widget.bytes, widget.artworkPath);
+      if (!mounted || !identical(_token, token)) return;
+      if (file == null) {
+        setState(() => _failed = true);
+        return;
+      }
+      final player = VideoPlayerController.file(
+        file,
+        videoPlayerOptions: VideoPlayerOptions(mixWithOthers: true),
+      );
+      await player.initialize();
+      if (!mounted || !identical(_token, token)) {
+        await player.dispose();
+        return;
+      }
+      await player.setVolume(0);
+      await player.setLooping(true);
+      _player = player;
+      setState(() {});
+      await _syncPlayback();
+      _tuneRimTimer();
+    } catch (_) {
+      if (mounted && identical(_token, token)) setState(() => _failed = true);
+    }
+  }
+
+  Future<void> _syncPlayback() async {
+    final player = _player;
+    if (player == null || !player.value.isInitialized) return;
+    try {
+      if (widget.animate && widget.playing) {
+        await player.play();
+        _primed = true;
+        return;
+      }
+      if (!_primed) {
+        await player.play();
+        await Future<void>.delayed(const Duration(milliseconds: 80));
+        _primed = true;
+      }
+      await player.pause();
+    } catch (_) {}
+  }
+
+  void _tuneRimTimer() {
+    _rimTimer?.cancel();
+    _rimTimer = null;
+    if (!widget.animate || !widget.playing) return;
+    final path = widget.artworkPath;
+    if (path == null || path.isEmpty) return;
+    _rimTimer = Timer.periodic(const Duration(milliseconds: 180), (_) => unawaited(_pushRim()));
+    unawaited(_pushRim());
+  }
+
+  Future<void> _pushRim() async {
+    if (_rimBusy || !mounted || !widget.playing) return;
+    final path = widget.artworkPath;
+    if (path == null || path.isEmpty) return;
+    final box = _bound.currentContext?.findRenderObject() as RenderRepaintBoundary?;
+    if (box == null || !box.hasSize || box.size.isEmpty) return;
+    _rimBusy = true;
+    try {
+      final image = await box.toImage(pixelRatio: 0.2);
+      try {
+        final colors = await sampleRimFromImage(image, circle: false);
+        if (colors.length >= 2) CoverRimLive.instance.push(path, colors);
+      } finally {
+        image.dispose();
+      }
+    } catch (_) {
+    } finally {
+      _rimBusy = false;
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    if (_failed) {
+      return widget.errorBuilder?.call(context, 'video', StackTrace.empty) ??
+          const ColoredBox(
+            color: Color(0xFF3A4A56),
+            child: Icon(Icons.movie_outlined, color: Colors.white54),
+          );
+    }
+    final player = _player;
+    if (player == null || !player.value.isInitialized) {
+      return const ColoredBox(color: Color(0xFF3A4A56));
+    }
+    final size = player.value.size;
+    final width = size.width <= 0 ? 1.0 : size.width;
+    final height = size.height <= 0 ? 1.0 : size.height;
+    return RepaintBoundary(
+      key: _bound,
+      child: FittedBox(
+        fit: widget.fit,
+        clipBehavior: Clip.hardEdge,
+        child: SizedBox(
+          width: width,
+          height: height,
+          child: VideoPlayer(player),
+        ),
+      ),
+    );
+  }
+}
+
+Future<File?> _videoFile(Uint8List bytes, String? trackPath) async {
+  if (trackPath != null && trackPath.isNotEmpty) {
+    try {
+      final cached = await ArtworkStore.instance.mediaFile(trackPath);
+      if (cached != null) return cached;
+    } catch (_) {}
+  }
+  try {
+    final dir = await getTemporaryDirectory();
+    final ext = artworkExtension(bytes);
+    final stamp = '${bytes.length}_${bytes[0]}_${bytes[bytes.length >> 1]}_${bytes[bytes.length - 1]}';
+    final file = File(p.join(dir.path, 'cover_$stamp.$ext'));
+    if (!await file.exists() || await file.length() != bytes.length) {
+      await file.writeAsBytes(bytes, flush: false);
+    }
+    return file;
+  } catch (_) {
+    return null;
   }
 }

@@ -20,7 +20,7 @@ class VideoToGifScreen extends StatefulWidget {
 }
 
 class _VideoToGifScreenState extends State<VideoToGifScreen> {
-  static const _fpsChoices = [8, 12, 15];
+  static const _fpsChoices = [8, 12, 15, 20, 24, 30];
   static const _widthChoices = [240, 320, 480, 576, 720];
   static const _maxSpanMs = 15000;
 

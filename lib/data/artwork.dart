@@ -7,10 +7,15 @@ import 'package:path/path.dart' as p;
 import 'package:path_provider/path_provider.dart';
 
 import 'cover_image.dart';
+import 'tag_write.dart';
 
 const _artworkExts = ['bin', 'gif', 'webp', 'mp4', 'webm'];
 
 Uint8List? extractArtworkBytes(String trackPath) {
+  try {
+    final motion = readNullmp3MotionCover(File(trackPath));
+    if (motion != null && motion.length >= 32) return motion;
+  } catch (_) {}
   try {
     final meta = readMetadata(File(trackPath), getImage: true);
     if (meta.pictures.isEmpty) return null;
