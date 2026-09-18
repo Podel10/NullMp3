@@ -15,6 +15,18 @@ import '../data/scanner.dart';
 import '../l10n/strings.dart';
 import '../theme/app_theme.dart';
 
+enum BeatHaloMode {
+  simple,
+  advanced;
+
+  static BeatHaloMode fromName(String? name) {
+    return BeatHaloMode.values.firstWhere(
+      (value) => value.name == name,
+      orElse: () => BeatHaloMode.advanced,
+    );
+  }
+}
+
 class SettingsController extends ChangeNotifier {
   static const _kTheme = 'themeMode';
   static const _kThemeId = 'themeId';
@@ -41,6 +53,7 @@ class SettingsController extends ChangeNotifier {
   static const _kLanguage = 'language';
   static const _kStatsEnabled = 'statsEnabled';
   static const _kBeatHalo = 'beatHalo';
+  static const _kBeatHaloMode = 'beatHaloMode';
   static const _kOffline = 'offlineMode';
   static const _kAskedAllFiles = 'askedAllFiles';
 
@@ -68,6 +81,7 @@ class SettingsController extends ChangeNotifier {
   bool continuous = true;
   bool statsEnabled = true;
   bool beatHalo = false;
+  BeatHaloMode beatHaloMode = BeatHaloMode.advanced;
   bool offlineMode = false;
   AppLanguage language = AppLanguage.english;
 
@@ -140,6 +154,7 @@ class SettingsController extends ChangeNotifier {
     continuous = _prefs.getBool(_kContinuous) ?? true;
     statsEnabled = _prefs.getBool(_kStatsEnabled) ?? true;
     beatHalo = _prefs.getBool(_kBeatHalo) ?? false;
+    beatHaloMode = BeatHaloMode.fromName(_prefs.getString(_kBeatHaloMode));
     offlineMode = _prefs.getBool(_kOffline) ?? false;
     _askedAllFiles = _prefs.getBool(_kAskedAllFiles) ?? false;
     NetworkGate.offline = offlineMode;
@@ -261,6 +276,12 @@ class SettingsController extends ChangeNotifier {
   Future<void> setBeatHalo(bool value) async {
     beatHalo = value;
     await _prefs.setBool(_kBeatHalo, value);
+    notifyListeners();
+  }
+
+  Future<void> setBeatHaloMode(BeatHaloMode value) async {
+    beatHaloMode = value;
+    await _prefs.setString(_kBeatHaloMode, value.name);
     notifyListeners();
   }
 

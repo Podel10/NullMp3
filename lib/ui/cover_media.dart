@@ -25,6 +25,7 @@ class CoverBytesView extends StatelessWidget {
     this.animate = false,
     this.playing = true,
     this.live,
+    this.liveRim = false,
     this.artworkPath,
   });
 
@@ -36,6 +37,7 @@ class CoverBytesView extends StatelessWidget {
   final bool animate;
   final bool playing;
   final bool? live;
+  final bool liveRim;
   final String? artworkPath;
 
   @override
@@ -54,6 +56,7 @@ class CoverBytesView extends StatelessWidget {
         fit: fit,
         playing: playing,
         animate: animate,
+        liveRim: liveRim,
         artworkPath: artworkPath,
         errorBuilder: errorBuilder,
       );
@@ -64,6 +67,7 @@ class CoverBytesView extends StatelessWidget {
           bytes: bytes,
           fit: fit,
           playing: playing,
+          cacheWidth: cacheWidth,
           errorBuilder: errorBuilder,
         );
       }
@@ -174,12 +178,14 @@ class _AnimatedRasterCover extends StatefulWidget {
     required this.bytes,
     required this.fit,
     required this.playing,
+    this.cacheWidth,
     this.errorBuilder,
   });
 
   final Uint8List bytes;
   final BoxFit fit;
   final bool playing;
+  final int? cacheWidth;
   final ImageErrorWidgetBuilder? errorBuilder;
 
   @override
@@ -191,6 +197,7 @@ class _AnimatedRasterCoverState extends State<_AnimatedRasterCover> {
   ui.Image? _image;
   Object? _token;
   Completer<void>? _resume;
+  Completer<void>? _delayAbort;
   var _failed = false;
   var _index = -1;
   Duration _hold = const Duration(milliseconds: 33);
@@ -208,13 +215,18 @@ class _AnimatedRasterCoverState extends State<_AnimatedRasterCover> {
       unawaited(_start());
       return;
     }
-    if (widget.playing) _wake();
+    if (widget.playing) {
+      _wake();
+    } else {
+      _abortDelay();
+    }
   }
 
   @override
   void dispose() {
     _token = null;
     _wake();
+    _abortDelay();
     _codec?.dispose();
     _codec = null;
     _image?.dispose();
@@ -227,6 +239,12 @@ class _AnimatedRasterCoverState extends State<_AnimatedRasterCover> {
     _resume = null;
   }
 
+  void _abortDelay() {
+    final abort = _delayAbort;
+    _delayAbort = null;
+    if (abort != null && !abort.isCompleted) abort.complete();
+  }
+
   Future<void> _waitWhilePaused() async {
     if (widget.playing) return;
     final waiter = _resume ??= Completer<void>();
@@ -237,12 +255,16 @@ class _AnimatedRasterCoverState extends State<_AnimatedRasterCover> {
     final token = Object();
     _token = token;
     _wake();
+    _abortDelay();
     _codec?.dispose();
     _codec = null;
     _failed = false;
     _index = -1;
     try {
-      final codec = await ui.instantiateImageCodec(widget.bytes);
+      final codec = await ui.instantiateImageCodec(
+        widget.bytes,
+        targetWidth: (widget.cacheWidth ?? 720).clamp(64, 720),
+      );
       if (!mounted || !identical(_token, token)) {
         codec.dispose();
         return;
@@ -312,12 +334,13 @@ class _AnimatedRasterCoverState extends State<_AnimatedRasterCover> {
 
   Future<void> _delayWhilePlaying(Duration wait) async {
     if (wait <= Duration.zero) return;
-    final end = DateTime.now().add(wait);
-    while (mounted && widget.playing && DateTime.now().isBefore(end)) {
-      var slice = end.difference(DateTime.now());
-      if (slice.inMilliseconds > 32) slice = const Duration(milliseconds: 32);
-      if (slice.inMilliseconds <= 0) return;
-      await Future<void>.delayed(slice);
+    if (!widget.playing) return;
+    final abort = Completer<void>();
+    _delayAbort = abort;
+    try {
+      await Future.any<void>([Future<void>.delayed(wait), abort.future]);
+    } finally {
+      if (identical(_delayAbort, abort)) _delayAbort = null;
     }
   }
 
@@ -345,6 +368,7 @@ class _VideoCover extends StatefulWidget {
     required this.fit,
     required this.playing,
     required this.animate,
+    this.liveRim = false,
     this.artworkPath,
     this.errorBuilder,
   });
@@ -353,6 +377,7 @@ class _VideoCover extends StatefulWidget {
   final BoxFit fit;
   final bool playing;
   final bool animate;
+  final bool liveRim;
   final String? artworkPath;
   final ImageErrorWidgetBuilder? errorBuilder;
 
@@ -382,8 +407,12 @@ class _VideoCoverState extends State<_VideoCover> {
       unawaited(_open());
       return;
     }
-    unawaited(_syncPlayback());
-    _tuneRimTimer();
+    if (oldWidget.playing != widget.playing ||
+        oldWidget.animate != widget.animate ||
+        oldWidget.liveRim != widget.liveRim) {
+      unawaited(_syncPlayback());
+      _tuneRimTimer();
+    }
   }
 
   @override
@@ -460,22 +489,22 @@ class _VideoCoverState extends State<_VideoCover> {
   void _tuneRimTimer() {
     _rimTimer?.cancel();
     _rimTimer = null;
-    if (!widget.animate || !widget.playing) return;
+    if (!widget.liveRim || !widget.animate || !widget.playing) return;
     final path = widget.artworkPath;
     if (path == null || path.isEmpty) return;
-    _rimTimer = Timer.periodic(const Duration(milliseconds: 180), (_) => unawaited(_pushRim()));
+    _rimTimer = Timer.periodic(const Duration(milliseconds: 220), (_) => unawaited(_pushRim()));
     unawaited(_pushRim());
   }
 
   Future<void> _pushRim() async {
-    if (_rimBusy || !mounted || !widget.playing) return;
+    if (_rimBusy || !mounted || !widget.liveRim || !widget.playing) return;
     final path = widget.artworkPath;
     if (path == null || path.isEmpty) return;
     final box = _bound.currentContext?.findRenderObject() as RenderRepaintBoundary?;
     if (box == null || !box.hasSize || box.size.isEmpty) return;
     _rimBusy = true;
     try {
-      final image = await box.toImage(pixelRatio: 0.2);
+      final image = await box.toImage(pixelRatio: 0.12);
       try {
         final colors = await sampleRimFromImage(image, circle: false);
         if (colors.length >= 2) CoverRimLive.instance.push(path, colors);

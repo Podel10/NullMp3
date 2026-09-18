@@ -32,6 +32,7 @@ class CoverArt extends StatefulWidget {
     this.muted = false,
     this.loadArtwork,
     this.animate = false,
+    this.liveRim = false,
     this.softEdge = false,
   });
 
@@ -43,6 +44,7 @@ class CoverArt extends StatefulWidget {
   final bool muted;
   final bool? loadArtwork;
   final bool animate;
+  final bool liveRim;
   final bool softEdge;
 
   @override
@@ -103,7 +105,7 @@ class _CoverArtState extends State<CoverArt> {
     final seed = widget.track?.albumKey ?? widget.track?.title ?? '?';
     final iconSize = widget.expand ? 80.0 : widget.size * 0.42;
     final circle = widget.track?.isCircleCover ?? false;
-    final playing = widget.animate && contextPlayer(context).playing;
+    final playing = widget.animate && context.select<PlayerController, bool>((player) => player.playing);
     Widget child = SizedBox(
       width: widget.expand ? double.infinity : widget.size,
       height: widget.expand ? double.infinity : widget.size,
@@ -115,6 +117,7 @@ class _CoverArtState extends State<CoverArt> {
               animate: widget.animate,
               playing: playing,
               live: widget.animate,
+              liveRim: widget.liveRim,
               artworkPath: widget.track?.path,
               filterQuality: widget.expand ? FilterQuality.medium : FilterQuality.low,
               cacheWidth: ((widget.expand ? 420 : widget.size) *

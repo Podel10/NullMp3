@@ -296,6 +296,29 @@ class _TagEditorSheetState extends State<TagEditorSheet> {
                     value: context.watch<SettingsController>().beatHalo,
                     onChanged: (value) => context.read<SettingsController>().setBeatHalo(value),
                   ),
+                  if (context.watch<SettingsController>().beatHalo) ...[
+                    Text(
+                      s.beatHaloModeHint,
+                      style: const TextStyle(color: Colors.white54, fontSize: 12),
+                    ),
+                    const SizedBox(height: 8),
+                    Row(
+                      children: [
+                        _haloModeChoice(
+                          mode: BeatHaloMode.simple,
+                          icon: Icons.waves_outlined,
+                          label: s.simpleWaves,
+                        ),
+                        const SizedBox(width: 8),
+                        _haloModeChoice(
+                          mode: BeatHaloMode.advanced,
+                          icon: Icons.graphic_eq_rounded,
+                          label: s.advancedWaves,
+                        ),
+                      ],
+                    ),
+                    const SizedBox(height: 8),
+                  ],
                   Align(
                     alignment: Alignment.centerLeft,
                     child: Wrap(
@@ -403,7 +426,14 @@ class _TagEditorSheetState extends State<TagEditorSheet> {
             color: Color(0xFF3A4A56),
             child: Icon(Icons.music_note, color: Colors.white54, size: 56),
           )
-        : CoverBytesView(bytes: _cover!, fit: BoxFit.cover, animate: true, playing: true);
+        : CoverBytesView(
+            bytes: _cover!,
+            fit: BoxFit.cover,
+            animate: true,
+            playing: true,
+            cacheWidth: 480,
+            artworkPath: _coverChanged ? null : widget.track.path,
+          );
     if (_coverShape == CoverShape.circle) {
       return ClipOval(child: art);
     }
@@ -428,6 +458,40 @@ class _TagEditorSheetState extends State<TagEditorSheet> {
         ),
         child: InkWell(
           onTap: () => _setCoverShape(shape),
+          borderRadius: BorderRadius.circular(12),
+          child: Padding(
+            padding: const EdgeInsets.symmetric(vertical: 10),
+            child: Column(
+              children: [
+                Icon(icon, size: 22, color: selected ? Colors.white : Colors.white54),
+                const SizedBox(height: 4),
+                Text(
+                  label,
+                  style: TextStyle(fontSize: 12, color: selected ? Colors.white : Colors.white54),
+                ),
+              ],
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+
+  Widget _haloModeChoice({
+    required BeatHaloMode mode,
+    required IconData icon,
+    required String label,
+  }) {
+    final selected = context.watch<SettingsController>().beatHaloMode == mode;
+    return Expanded(
+      child: Material(
+        color: selected ? const Color(0xFF1C3A48) : const Color(0xFF0B1E28),
+        shape: RoundedRectangleBorder(
+          borderRadius: BorderRadius.circular(12),
+          side: BorderSide(color: selected ? const Color(0xFF4D8FA8) : const Color(0xFF1C3A48)),
+        ),
+        child: InkWell(
+          onTap: () => context.read<SettingsController>().setBeatHaloMode(mode),
           borderRadius: BorderRadius.circular(12),
           child: Padding(
             padding: const EdgeInsets.symmetric(vertical: 10),

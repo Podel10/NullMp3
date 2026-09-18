@@ -234,6 +234,34 @@ class S {
   String get videoUnreadable => _t('Could not read this video', 'Не удалось прочитать это видео', '无法读取该视频');
   String gifFrames(int count) => _t('$count frames', 'кадров: $count', '$count 帧');
 
+  String get downloadAudio => _t('SoundCloud', 'SoundCloud', 'SoundCloud');
+  String get downloadAudioHint => _t(
+        'Paste a SoundCloud link. Audio is saved into the library as MP3 when the source allows it, otherwise M4A.',
+        'Вставьте ссылку SoundCloud. Аудио сохранится в библиотеку: MP3, если так отдаёт источник, иначе M4A.',
+        '粘贴 SoundCloud 链接。音频会存进曲库：能下 MP3 就存 MP3，否则为 M4A。',
+      );
+  String get downloadAudioLink => _t('Link', 'Ссылка', '链接');
+  String get downloadAudioPaste => _t('Paste', 'Вставить', '粘贴');
+  String get downloadAudioGo => _t('Download', 'Скачать', '下载');
+  String get downloadAudioBusy => _t('Downloading…', 'Скачиваю…', '正在下载…');
+  String get downloadAudioTagging => _t('Writing tags…', 'Пишем теги…', '正在写入标签…');
+  String get downloadAudioOffline => _t(
+        'Turn off offline mode to download.',
+        'Выключите офлайн-режим, чтобы скачивать.',
+        '请关闭离线模式后再下载。',
+      );
+  String get downloadAudioBadLink => _t(
+        'Need a SoundCloud link.',
+        'Нужна ссылка SoundCloud.',
+        '需要 SoundCloud 链接。',
+      );
+  String get downloadAudioFailed => _t('Could not download this link', 'Не удалось скачать по этой ссылке', '无法下载该链接');
+  String get downloadAudioCancelled => _t('Cancelled', 'Отменено', '已取消');
+  String downloadAudioSaved(int n) => _t('Saved $n to the library', 'В библиотеке: $n', '已保存 $n 首到曲库');
+  String downloadAudioItem(int index, int total, String title) =>
+      _t('$index / $total  $title', '$index / $total  $title', '$index / $total  $title');
+  String get downloadAudioFolder => _t('Saved to Music/NullMP3', 'Сохранено в Music/NullMP3', '已保存到 Music/NullMP3');
+
   String get libraryFolders => _t('Library folders', 'Папки библиотеки', '曲库文件夹');
   String get libraryFoldersHint =>
       _t('Add or remove any folder, including Download', 'Добавляйте и убирайте любые папки, включая Download', '可添加或移除任意文件夹，包括 Download');
@@ -348,6 +376,13 @@ class S {
         'Pulses with the playing audio. Android may ask for the microphone — that is how the system reads the player spectrum, it is not recording.',
         'Пульсирует по реальному звуку. Android может спросить микрофон — так система отдаёт спектр плеера, запись не идёт.',
         '随正在播放的音频脉冲。Android 可能请求麦克风权限——系统用它读取播放器频谱，并不会录音。',
+      );
+  String get simpleWaves => _t('Simple waves', 'Простые волны', '简易光环');
+  String get advancedWaves => _t('Advanced waves', 'Сложные волны', '高级光环');
+  String get beatHaloModeHint => _t(
+        'Simple uses the first cover frame. Advanced follows colours on GIF and video frames.',
+        'Простые берут первый кадр обложки. Сложные следят за цветами GIF и видео.',
+        '简易模式取封面首帧颜色。高级模式跟随 GIF 和视频每一帧的颜色。',
       );
   String get details => _t('Details', 'Подробнее', '详情');
   String get playbackSpeed => _t('Playback speed', 'Скорость воспроизведения', '播放速度');

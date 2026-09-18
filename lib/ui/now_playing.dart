@@ -52,6 +52,7 @@ class NowPlayingScreen extends StatelessWidget {
           child: BeatHalo(
             key: ValueKey('halo-${track.path}-${track.coverShape.name}'),
             enabled: settings.beatHalo,
+            advanced: settings.beatHaloMode == BeatHaloMode.advanced,
             playing: player.playing,
             circle: track.isCircleCover,
             color: haloColor,
@@ -115,6 +116,8 @@ class NowPlayingScreen extends StatelessWidget {
                               muted: true,
                               loadArtwork: true,
                               animate: true,
+                              liveRim: settings.beatHalo &&
+                                  settings.beatHaloMode == BeatHaloMode.advanced,
                               softEdge: settings.beatHalo && track.isCircleCover,
                               heroTag: 'now-art',
                             ),

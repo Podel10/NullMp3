@@ -74,11 +74,16 @@ class CoverRimLive {
 
   final StreamController<CoverRimLiveFrame> _controller =
       StreamController<CoverRimLiveFrame>.broadcast();
+  String? _lastPath;
+  List<Color> _lastColors = const [];
 
   Stream<CoverRimLiveFrame> get stream => _controller.stream;
 
   void push(String path, List<Color> colors) {
     if (path.isEmpty || colors.length < 2) return;
+    if (path == _lastPath && sameRim(_lastColors, colors)) return;
+    _lastPath = path;
+    _lastColors = colors;
     _controller.add(CoverRimLiveFrame(path, colors));
   }
 }
@@ -97,15 +102,9 @@ Future<CoverRimSequence> sampleCoverRimSequence(
   required bool circle,
 }) async {
   if (bytes == null || bytes.length < 32) return CoverRimSequence.empty;
-  if (isVideoBytes(bytes)) {
-    final still = await sampleRimFromBytes(bytes, circle: circle);
-    if (still.isEmpty) return CoverRimSequence.empty;
-    return CoverRimSequence([
-      CoverRimFrame(colors: still, duration: Duration.zero),
-    ]);
-  }
+  if (isVideoBytes(bytes)) return CoverRimSequence.empty;
   try {
-    final codec = await ui.instantiateImageCodec(bytes, targetWidth: 96);
+    final codec = await ui.instantiateImageCodec(bytes, targetWidth: 64);
     final count = math.max(1, codec.frameCount);
     final limit = math.min(count, 160);
     final frames = <CoverRimFrame>[];
@@ -116,12 +115,12 @@ Future<CoverRimSequence> sampleCoverRimSequence(
         if (colors.isEmpty && frames.isNotEmpty) colors = frames.last.colors;
         if (colors.isEmpty) continue;
         var hold = frame.duration;
-        if (hold.inMilliseconds < 20) hold = const Duration(milliseconds: 80);
+        if (hold.inMilliseconds < 20) hold = const Duration(milliseconds: 100);
         frames.add(CoverRimFrame(colors: colors, duration: hold));
       } finally {
         frame.image.dispose();
       }
-      if (i % 8 == 7) await Future<void>.delayed(Duration.zero);
+      if (i % 4 == 3) await Future<void>.delayed(Duration.zero);
     }
     codec.dispose();
     if (frames.isEmpty) return CoverRimSequence.empty;
@@ -136,7 +135,7 @@ Future<List<Color>> sampleRimFromBytes(
   required bool circle,
 }) async {
   try {
-    final codec = await ui.instantiateImageCodec(bytes, targetWidth: 96);
+    final codec = await ui.instantiateImageCodec(bytes, targetWidth: 64);
     final frame = await codec.getNextFrame();
     codec.dispose();
     try {
@@ -236,7 +235,9 @@ double _coverChroma(Color color) {
 
 double _coverColorScore(Color color) {
   final chroma = _coverChroma(color);
-  final light = HSLColor.fromColor(color).lightness;
+  final maxC = math.max(color.r, math.max(color.g, color.b));
+  final minC = math.min(color.r, math.min(color.g, color.b));
+  final light = (maxC + minC) / 2;
   if (light < 0.06 || light > 0.94 || chroma < 0.05) return chroma * 0.15;
   return chroma * (1.0 - (light - 0.45).abs());
 }

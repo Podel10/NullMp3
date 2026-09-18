@@ -16,6 +16,7 @@ import android.provider.MediaStore
 import android.provider.OpenableColumns
 import io.flutter.embedding.android.FlutterActivity
 import io.flutter.embedding.engine.FlutterEngine
+import io.flutter.embedding.engine.FlutterEngineCache
 import io.flutter.plugin.common.EventChannel
 import io.flutter.plugin.common.MethodChannel
 import java.io.File
@@ -23,6 +24,10 @@ import java.util.concurrent.Executors
 import java.util.concurrent.atomic.AtomicBoolean
 
 class MainActivity : FlutterActivity() {
+    companion object {
+        const val ENGINE_ID = "nullmp3"
+    }
+
     private val channelName = "com.nullmp3.nullmp3/files"
     private val sessionChannelName = "com.nullmp3.nullmp3/session"
     private val deleteRequestCode = 4401
@@ -35,17 +40,14 @@ class MainActivity : FlutterActivity() {
     private val gifExecutor = Executors.newSingleThreadExecutor()
     private val mainHandler = Handler(Looper.getMainLooper())
 
-    override fun onPause() {
-        AudioHalo.pause()
-        super.onPause()
+    override fun getCachedEngineId(): String? {
+        return if (FlutterEngineCache.getInstance().contains(ENGINE_ID)) ENGINE_ID else null
     }
 
-    override fun onDestroy() {
-        AudioHalo.pause()
-        super.onDestroy()
-    }
+    override fun shouldDestroyEngineWithHost(): Boolean = false
 
     override fun configureFlutterEngine(flutterEngine: FlutterEngine) {
+        FlutterEngineCache.getInstance().put(ENGINE_ID, flutterEngine)
         super.configureFlutterEngine(flutterEngine)
         MethodChannel(flutterEngine.dartExecutor.binaryMessenger, channelName)
             .setMethodCallHandler { call, result ->

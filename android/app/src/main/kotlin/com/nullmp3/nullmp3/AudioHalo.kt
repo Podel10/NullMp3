@@ -41,7 +41,13 @@ object AudioHalo : EventChannel.StreamHandler {
                 }
                 if (rebound) return true
             }
-            stopCaptureLocked()
+            if (force) {
+                stopCaptureLocked()
+            } else if (visualizer != null && sessionId == id) {
+                return false
+            } else {
+                stopCaptureLocked()
+            }
             return attachLocked(id)
         }
     }
@@ -49,7 +55,9 @@ object AudioHalo : EventChannel.StreamHandler {
     fun pause() {
         synchronized(lock) {
             try {
-                visualizer?.setDataCaptureListener(null, 0, false, false)
+                // Stop FFT without dropping the effect. Passing a null listener
+                // while enabled kills capture on several OEMs until recreate.
+                visualizer?.setDataCaptureListener(captureListener, 0, false, false)
             } catch (_: Exception) {
             }
             // Keep the effect attached. enabled=false / release mutes ExoPlayer.
@@ -245,20 +253,11 @@ object AudioHalo : EventChannel.StreamHandler {
 
     private fun bindCaptureLocked(vis: Visualizer): Boolean {
         val rate = max(Visualizer.getMaxCaptureRate() / 2, 20000)
-        try {
-            vis.setDataCaptureListener(null, 0, false, false)
-        } catch (_: Exception) {
-        }
-        try {
-            vis.setDataCaptureListener(captureListener, rate, false, true)
-        } catch (_: Exception) {
-            return false
-        }
-        try {
-            if (!vis.enabled) vis.enabled = true
-        } catch (_: Exception) {
-        }
+        // Re-enable FFT in place. pause() leaves the effect attached; clearing
+        // the listener while enabled kills capture on several OEMs.
         return try {
+            vis.setDataCaptureListener(captureListener, rate, false, true)
+            if (!vis.enabled) vis.enabled = true
             vis.enabled
         } catch (_: Exception) {
             false

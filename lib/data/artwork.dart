@@ -9,7 +9,10 @@ import 'package:path_provider/path_provider.dart';
 import 'cover_image.dart';
 import 'tag_write.dart';
 
-const _artworkExts = ['bin', 'gif', 'webp', 'mp4', 'webm'];
+const _artworkExts = ['gif', 'webp', 'mp4', 'webm', 'bin'];
+const _videoHeader = 256;
+const _maxMemoryItems = 40;
+const _maxMemoryBytes = 10 * 1024 * 1024;
 
 Uint8List? extractArtworkBytes(String trackPath) {
   try {
@@ -93,21 +96,21 @@ class ArtworkStore extends ChangeNotifier {
   }
 
   Future<File?> mediaFile(String trackPath) async {
-    final bytes = _memory[trackPath] ?? await get(trackPath);
-    if (bytes == null || bytes.isEmpty || !isVideoBytes(bytes)) return null;
-    final dir = _cacheDir;
-    if (dir == null) return null;
     final key = _key(trackPath);
-    final ext = artworkExtension(bytes);
-    final file = _file(key, ext);
-    if (!await file.exists()) {
+    for (final ext in const ['mp4', 'webm', 'bin']) {
+      final file = _file(key, ext);
       try {
-        await file.writeAsBytes(bytes, flush: false);
-      } catch (_) {
-        return null;
-      }
+        if (!await file.exists()) continue;
+        final length = await file.length();
+        if (length < 32) continue;
+        if (ext == 'bin') {
+          final header = await _readPrefix(file, 32);
+          if (header == null || !isVideoBytes(header)) continue;
+        }
+        return file;
+      } catch (_) {}
     }
-    return file;
+    return null;
   }
 
   Future<Uint8List?> _load(String trackPath) async {
@@ -115,9 +118,19 @@ class ArtworkStore extends ChangeNotifier {
     final key = _key(trackPath);
     final cached = await _existingFile(key);
     if (cached != null) {
-      final bytes = await cached.readAsBytes();
-      final value = bytes.isEmpty ? null : bytes;
-      return _finishLoad(trackPath, gen, value);
+      try {
+        if (_isVideoPath(cached.path)) {
+          final header = await _readPrefix(cached, _videoHeader);
+          return _finishLoad(trackPath, gen, header);
+        }
+        final bytes = await cached.readAsBytes();
+        final value = bytes.isEmpty ? null : bytes;
+        if (value != null && isVideoBytes(value)) {
+          unawaited(_storeVideoFile(key, value));
+          return _finishLoad(trackPath, gen, _headerOf(value));
+        }
+        return _finishLoad(trackPath, gen, value);
+      } catch (_) {}
     }
 
     await _acquire();
@@ -128,11 +141,18 @@ class ArtworkStore extends ChangeNotifier {
       _release();
     }
 
+    if (generationOf(trackPath) != gen) return _memory[trackPath];
+    if (bytes != null && isVideoBytes(bytes)) {
+      await _storeVideoFile(key, bytes);
+      return _finishLoad(trackPath, gen, _headerOf(bytes));
+    }
     final kept = _finishLoad(trackPath, gen, bytes);
     if (kept != bytes) return kept;
     if (_cacheDir != null) {
       try {
-        await _file(key, 'bin').writeAsBytes(bytes ?? Uint8List(0), flush: false);
+        final ext = bytes == null || bytes.isEmpty ? 'bin' : artworkExtension(bytes);
+        await _file(key, ext).writeAsBytes(bytes ?? Uint8List(0), flush: false);
+        await _deleteSiblings(key, ext);
       } catch (_) {}
     }
     return bytes;
@@ -146,8 +166,56 @@ class ArtworkStore extends ChangeNotifier {
 
   void _remember(String trackPath, Uint8List? bytes) {
     _memory[trackPath] = bytes;
-    while (_memory.length > 80) {
-      _memory.remove(_memory.keys.first);
+    var total = 0;
+    for (final item in _memory.values) {
+      total += item?.lengthInBytes ?? 0;
+    }
+    while (_memory.length > _maxMemoryItems || total > _maxMemoryBytes) {
+      if (_memory.length <= 4) break;
+      final first = _memory.keys.first;
+      total -= _memory.remove(first)?.lengthInBytes ?? 0;
+    }
+  }
+
+  Future<void> _storeVideoFile(String key, Uint8List bytes) async {
+    if (_cacheDir == null) return;
+    final ext = artworkExtension(bytes);
+    try {
+      await _file(key, ext).writeAsBytes(bytes, flush: false);
+      await _deleteSiblings(key, ext);
+    } catch (_) {}
+  }
+
+  static bool _isVideoPath(String path) {
+    final lower = path.toLowerCase();
+    return lower.endsWith('.mp4') || lower.endsWith('.webm');
+  }
+
+  static Uint8List _headerOf(Uint8List bytes) {
+    if (bytes.length <= _videoHeader) return Uint8List.fromList(bytes);
+    return Uint8List.fromList(bytes.sublist(0, _videoHeader));
+  }
+
+  static Future<Uint8List?> _readPrefix(File file, int max) async {
+    RandomAccessFile? raf;
+    try {
+      raf = await file.open();
+      final length = await raf.length();
+      if (length <= 0) return null;
+      final n = length < max ? length : max;
+      final out = Uint8List(n);
+      var filled = 0;
+      while (filled < n) {
+        final read = await raf.readInto(out, filled, n);
+        if (read <= 0) break;
+        filled += read;
+      }
+      if (filled == n) return out;
+      return Uint8List.fromList(out.sublist(0, filled));
+    } catch (_) {
+      return null;
+    } finally {
+      await raf?.close();
     }
   }
 
@@ -171,7 +239,8 @@ class ArtworkStore extends ChangeNotifier {
 
   Future<void> put(String trackPath, Uint8List bytes) async {
     _generation[trackPath] = generationOf(trackPath) + 1;
-    _remember(trackPath, bytes);
+    final video = isVideoBytes(bytes);
+    _remember(trackPath, video ? _headerOf(bytes) : bytes);
     final key = _key(trackPath);
     final ext = artworkExtension(bytes);
     if (_cacheDir != null) {

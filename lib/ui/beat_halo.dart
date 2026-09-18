@@ -19,6 +19,7 @@ class BeatHalo extends StatefulWidget {
     required this.playing,
     required this.circle,
     required this.color,
+    this.advanced = true,
     this.artworkPath,
     this.sessionId,
     this.sessionIds,
@@ -29,6 +30,7 @@ class BeatHalo extends StatefulWidget {
   final bool playing;
   final bool circle;
   final Color color;
+  final bool advanced;
   final String? artworkPath;
   final int? sessionId;
   final Stream<int?>? sessionIds;
@@ -55,6 +57,7 @@ class _BeatHaloState extends State<BeatHalo>
   int _rimGen = 0;
   int _artGen = -1;
   bool _live = false;
+  bool _capturePaused = true;
   bool _backgrounded = false;
   DateTime? _lastDataAt;
   DateTime? _restartAt;
@@ -74,7 +77,8 @@ class _BeatHaloState extends State<BeatHalo>
     super.initState();
     WidgetsBinding.instance.addObserver(this);
     _sessionId = widget.sessionId;
-    _ticker = createTicker(_onTick)..start();
+    _ticker = createTicker(_onTick);
+    if (widget.enabled) _ticker.start();
     _sessionSub = widget.sessionIds?.listen(_onSession);
     ArtworkStore.instance.addListener(_onArtwork);
     _rimLiveSub = CoverRimLive.instance.stream.listen(_onLiveRim);
@@ -95,6 +99,7 @@ class _BeatHaloState extends State<BeatHalo>
     if (state == AppLifecycleState.resumed) {
       _backgrounded = false;
       _live = false;
+      _capturePaused = true;
       if (widget.playing && widget.enabled) _scheduleCapture(force: true);
       return;
     }
@@ -102,11 +107,7 @@ class _BeatHaloState extends State<BeatHalo>
       return;
     }
     _backgrounded = true;
-    _startTimer?.cancel();
-    _live = false;
-    if (!kIsWeb && defaultTargetPlatform == TargetPlatform.android) {
-      unawaited(_methods.invokeMethod<void>('pause'));
-    }
+    _pauseCapture();
   }
 
   @override
@@ -122,22 +123,34 @@ class _BeatHaloState extends State<BeatHalo>
         widget.sessionId != _sessionId) {
       _sessionId = widget.sessionId;
       _live = false;
+      _capturePaused = true;
       if (widget.playing && widget.enabled) _scheduleCapture();
     }
+    if (oldWidget.enabled != widget.enabled) {
+      if (widget.enabled) {
+        if (!_ticker.isTicking) _ticker.start();
+      } else if (_ticker.isTicking) {
+        _ticker.stop();
+      }
+    }
     if (oldWidget.enabled != widget.enabled || oldWidget.playing != widget.playing) {
-      if (!widget.enabled || !widget.playing) {
+      if (!widget.enabled) {
+        _pauseCapture();
+      } else if (!widget.playing) {
         _live = false;
       }
       _scheduleCapture();
     }
     if (oldWidget.playing != widget.playing) _syncRimClock();
-    if (oldWidget.artworkPath != widget.artworkPath) {
+    if (oldWidget.artworkPath != widget.artworkPath || oldWidget.advanced != widget.advanced) {
       _coverFrame = null;
       _rimFromCover = false;
+      _rimLive = false;
     }
     if (oldWidget.artworkPath != widget.artworkPath ||
         oldWidget.circle != widget.circle ||
-        oldWidget.enabled != widget.enabled) {
+        oldWidget.enabled != widget.enabled ||
+        oldWidget.advanced != widget.advanced) {
       unawaited(_loadRim());
     }
   }
@@ -179,6 +192,19 @@ class _BeatHaloState extends State<BeatHalo>
     _artGen = ArtworkStore.instance.generationOf(path);
     final bytes = await ArtworkStore.instance.get(path);
     if (!mounted || gen != _rimGen) return;
+    if (!widget.advanced) {
+      final rim = bytes == null || bytes.length < 32
+          ? const <Color>[]
+          : await sampleRimFromBytes(bytes, circle: widget.circle);
+      if (!mounted || gen != _rimGen) return;
+      _rimLoop = CoverRimSequence.empty;
+      _rimLive = false;
+      _rimFromCover = false;
+      _coverFrame = null;
+      _resetRimClock();
+      if (!sameRim(_rim, rim)) setState(() => _rim = rim);
+      return;
+    }
     final sequence = await sampleCoverRimSequence(bytes, circle: widget.circle);
     if (!mounted || gen != _rimGen) return;
     _rimLoop = sequence;
@@ -191,7 +217,7 @@ class _BeatHaloState extends State<BeatHalo>
   }
 
   void _onCoverMotion(CoverMotionNotification note) {
-    if (!widget.enabled) return;
+    if (!widget.enabled || !widget.advanced) return;
     _coverFrame = note.index;
     _rimFromCover = true;
     _syncRimClock();
@@ -207,7 +233,7 @@ class _BeatHaloState extends State<BeatHalo>
   }
 
   void _onLiveRim(CoverRimLiveFrame frame) {
-    if (!widget.enabled) return;
+    if (!widget.enabled || !widget.advanced) return;
     if (frame.path != widget.artworkPath) return;
     if (sameRim(_rim, frame.colors)) return;
     _rimLive = true;
@@ -223,7 +249,12 @@ class _BeatHaloState extends State<BeatHalo>
   }
 
   void _syncRimClock() {
-    final run = widget.enabled && widget.playing && _rimLoop.isAnimated && !_rimLive && !_rimFromCover;
+    final run = widget.enabled &&
+        widget.advanced &&
+        widget.playing &&
+        _rimLoop.isAnimated &&
+        !_rimLive &&
+        !_rimFromCover;
     if (run) {
       _rimClock ??= Stopwatch()..start();
       return;
@@ -235,11 +266,23 @@ class _BeatHaloState extends State<BeatHalo>
     _rimClock = null;
   }
 
+  void _pauseCapture() {
+    _startTimer?.cancel();
+    _live = false;
+    _lastDataAt = null;
+    _restartAt = null;
+    _capturePaused = true;
+    if (!kIsWeb && defaultTargetPlatform == TargetPlatform.android) {
+      unawaited(_methods.invokeMethod<void>('pause'));
+    }
+  }
+
   void _onSession(int? id) {
     if (id == null || id <= 0) return;
     if (_sessionId == id) return;
     _sessionId = id;
     _live = false;
+    _capturePaused = true;
     if (widget.playing && widget.enabled) _scheduleCapture();
   }
 
@@ -250,9 +293,12 @@ class _BeatHaloState extends State<BeatHalo>
       return;
     }
     if (!force && _live) return;
+    // Capture is still attached; rebinding the listener while enabled kills FFT.
+    if (!force && !_capturePaused) return;
     _startTimer = Timer(Duration(milliseconds: force ? 80 : 120), () {
       if (!mounted || _backgrounded || !widget.playing || !widget.enabled) return;
       if (!force && _live) return;
+      if (!force && !_capturePaused) return;
       unawaited(_syncCapture(force: force));
     });
   }
@@ -296,6 +342,7 @@ class _BeatHaloState extends State<BeatHalo>
     final fresh = last != null && now.difference(last) < const Duration(seconds: 2);
     if (fresh) return;
     _live = false;
+    _capturePaused = true;
     final hard = last == null
         ? now.difference(_restartAt!) > const Duration(seconds: 3)
         : now.difference(last) > const Duration(seconds: 4);
@@ -308,6 +355,7 @@ class _BeatHaloState extends State<BeatHalo>
       return;
     }
     if (!force && _live) return;
+    if (!force && !_capturePaused) return;
     final id = _sessionId ?? widget.sessionId;
     if (id == null || id <= 0) return;
     final allowed = await _ensureMic();
@@ -323,12 +371,17 @@ class _BeatHaloState extends State<BeatHalo>
       _restartAt = DateTime.now();
       if (!ok) {
         _live = false;
-      } else if (force) {
-        _live = false;
-        _lastDataAt = null;
+        _capturePaused = true;
+      } else {
+        _capturePaused = false;
+        if (force) {
+          _live = false;
+          _lastDataAt = null;
+        }
       }
     } catch (_) {
       _live = false;
+      _capturePaused = true;
     }
   }
 
@@ -345,12 +398,13 @@ class _BeatHaloState extends State<BeatHalo>
   }
 
   void _onData(dynamic raw) {
-    if (!widget.playing) return;
+    if (!widget.enabled || !widget.playing) return;
     if (raw is! Map) return;
     final peaks = raw['peaks'];
     if (peaks is! List || peaks.isEmpty) return;
     _lastDataAt = DateTime.now();
     _live = true;
+    _capturePaused = false;
     final next = <double>[
       for (final item in peaks) (item as num).toDouble().clamp(0.0, 1.0),
     ];

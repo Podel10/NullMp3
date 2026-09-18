@@ -138,7 +138,7 @@ class PlayerController extends ChangeNotifier with WidgetsBindingObserver {
     _session.setMethodCallHandler((call) async {
       switch (call.method) {
         case 'play':
-          if (!playing) await playPause();
+          if (hasTrack) await resumePlayback();
         case 'pause':
           if (playing) await playPause();
         case 'next':
@@ -235,13 +235,26 @@ class PlayerController extends ChangeNotifier with WidgetsBindingObserver {
 
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (state == AppLifecycleState.resumed) {
+      if (playing) unawaited(_keepAudioAlive());
+      return;
+    }
     if (state != AppLifecycleState.paused && state != AppLifecycleState.hidden) {
       return;
     }
     if (!kIsWeb && defaultTargetPlatform == TargetPlatform.android) {
       unawaited(const MethodChannel('com.nullmp3.nullmp3/halo').invokeMethod<void>('pause'));
     }
-    if (playing) _pushSession();
+    if (playing) unawaited(_keepAudioAlive());
+  }
+
+  Future<void> _keepAudioAlive() async {
+    if (defaultTargetPlatform != TargetPlatform.android) return;
+    try {
+      final session = await AudioSession.instance.timeout(const Duration(seconds: 2));
+      await session.setActive(true).timeout(const Duration(seconds: 2));
+    } catch (_) {}
+    _pushSession();
   }
 
   Future<void> resumePlayback({Duration? limit, bool force = false}) async {
