@@ -18,7 +18,7 @@ import '../models/models.dart';
 import 'library.dart';
 import 'settings.dart';
 
-class PlayerController extends ChangeNotifier {
+class PlayerController extends ChangeNotifier with WidgetsBindingObserver {
   PlayerController({required this.library, required this.settings}) {
     player.playingStream.listen((value) {
       if (value) {
@@ -103,7 +103,8 @@ class PlayerController extends ChangeNotifier {
   int _errorSkips = 0;
   int? _listenAnchorMs;
   bool _resumeAfterInterruption = false;
-  bool _userPaused = false;
+  bool _userPaused = true;
+  bool _userStarted = false;
   DateTime? _ignoreFocusUntil;
   Duration _lastPosition = Duration.zero;
   DateTime? _lastSessionPush;
@@ -123,13 +124,17 @@ class PlayerController extends ChangeNotifier {
   Future<void> init() async {
     if (_inited) return;
     _inited = true;
-    await player.setVolume(settings.volume);
-    await player.setSpeed(settings.speed);
     try {
-      await player.setPitch(settings.pitch);
+      await player.setVolume(settings.volume).timeout(const Duration(milliseconds: 800));
     } catch (_) {}
-    await _applyEqualizer();
+    try {
+      await player.setSpeed(settings.speed).timeout(const Duration(milliseconds: 800));
+    } catch (_) {}
+    try {
+      await player.setPitch(settings.pitch).timeout(const Duration(milliseconds: 800));
+    } catch (_) {}
     await _configureAudioSession();
+    WidgetsBinding.instance.addObserver(this);
     _session.setMethodCallHandler((call) async {
       switch (call.method) {
         case 'play':
@@ -143,9 +148,12 @@ class PlayerController extends ChangeNotifier {
       }
     });
     if (defaultTargetPlatform == TargetPlatform.android) {
-      try {
-        await Permission.notification.request();
-      } catch (_) {}
+      unawaited(
+        Permission.notification.request().timeout(
+          const Duration(seconds: 4),
+          onTimeout: () => PermissionStatus.denied,
+        ),
+      );
     }
     _pushSession();
   }
@@ -170,7 +178,7 @@ class PlayerController extends ChangeNotifier {
 
   Future<void> _configureAudioSession() async {
     try {
-      final session = await AudioSession.instance;
+      final session = await AudioSession.instance.timeout(const Duration(seconds: 2));
       await session.configure(
         const AudioSessionConfiguration(
           avAudioSessionCategory: AVAudioSessionCategory.playback,
@@ -183,7 +191,7 @@ class PlayerController extends ChangeNotifier {
           androidAudioFocusGainType: AndroidAudioFocusGainType.gain,
           androidWillPauseWhenDucked: false,
         ),
-      );
+      ).timeout(const Duration(seconds: 2));
       _noisySub = session.becomingNoisyEventStream.listen((_) {
         _resumeAfterInterruption = false;
         _userPaused = true;
@@ -191,29 +199,58 @@ class PlayerController extends ChangeNotifier {
         if (playing) unawaited(player.pause());
       });
       _interruptSub = session.interruptionEventStream.listen((event) {
-        if (_userPaused) return;
-        if (_ignoreFocusUntil != null && DateTime.now().isBefore(_ignoreFocusUntil!)) return;
-        if (event.begin) {
-          if (event.type == AudioInterruptionType.pause && playing) {
-            _resumeAfterInterruption = true;
-            unawaited(player.pause());
-          }
-          return;
-        }
-        if (event.type == AudioInterruptionType.pause && _resumeAfterInterruption) {
-          _resumeAfterInterruption = false;
-          unawaited(resumePlayback());
-        }
+        unawaited(_onAudioInterruption(event));
       });
     } catch (_) {}
   }
 
-  Future<void> resumePlayback({Duration? limit}) async {
+  Future<void> _onAudioInterruption(AudioInterruptionEvent event) async {
+    if (_userPaused) return;
+    if (_ignoreFocusUntil != null && DateTime.now().isBefore(_ignoreFocusUntil!)) return;
+    if (event.begin) {
+      if (event.type != AudioInterruptionType.pause || !playing) return;
+      // Home/Samsung often fire a pause interruption with no matching GAIN.
+      // Yield only for an actual call so background playback stays up.
+      await Future<void>.delayed(const Duration(milliseconds: 80));
+      if (_userPaused || !playing) return;
+      if (!await _inVoiceCall()) return;
+      _resumeAfterInterruption = true;
+      unawaited(player.pause());
+      return;
+    }
+    if (event.type == AudioInterruptionType.pause && _resumeAfterInterruption) {
+      _resumeAfterInterruption = false;
+      unawaited(resumePlayback());
+    }
+  }
+
+  Future<bool> _inVoiceCall() async {
+    if (defaultTargetPlatform != TargetPlatform.android) return false;
+    try {
+      return await _session.invokeMethod<bool>('inVoiceCall') ?? false;
+    } catch (_) {
+      return false;
+    }
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (state != AppLifecycleState.paused && state != AppLifecycleState.hidden) {
+      return;
+    }
+    if (!kIsWeb && defaultTargetPlatform == TargetPlatform.android) {
+      unawaited(const MethodChannel('com.nullmp3.nullmp3/halo').invokeMethod<void>('pause'));
+    }
+    if (playing) _pushSession();
+  }
+
+  Future<void> resumePlayback({Duration? limit, bool force = false}) async {
     _userPaused = false;
+    _userStarted = true;
     _ignoreFocusUntil = DateTime.now().add(const Duration(seconds: 2));
-    // just_audio's play() future only completes on pause/stop, not when
-    // sound starts. Awaiting it (or timing it out at 4s) left the clock
-    // running in silence until the timeout, then the volume fade kicked in.
+    // play() during setAudioSource throws "Loading interrupted" and the
+    // startup restore loop then looks like a frozen app.
+    if (_loading && !force) return;
     unawaited(player.play());
   }
 
@@ -271,6 +308,8 @@ class PlayerController extends ChangeNotifier {
 
   Future<void> playTracks(List<Track> tracks, {int start = 0}) async {
     if (tracks.isEmpty) return;
+    _userStarted = true;
+    _userPaused = false;
     queue = List<Track>.from(tracks);
     index = start.clamp(0, queue.length - 1);
     _history.clear();
@@ -292,6 +331,7 @@ class PlayerController extends ChangeNotifier {
 
   Future<void> playPause() async {
     _resumeAfterInterruption = false;
+    _userStarted = true;
     if (!hasTrack) return;
     if (playing || player.playing) {
       _userPaused = true;
@@ -591,7 +631,7 @@ class PlayerController extends ChangeNotifier {
   Future<void> applyEqualizer() => _applyEqualizer();
 
   Future<void> restoreSession() async {
-    if (hasTrack) return;
+    if (hasTrack || _userStarted) return;
     final prefs = await SharedPreferences.getInstance();
     final raw = prefs.getString('sessionQueue');
     if (raw == null) return;
@@ -599,6 +639,8 @@ class PlayerController extends ChangeNotifier {
     final byPath = {for (final track in library.allTracks) track.path: track};
     final restored = [for (final path in paths) if (byPath[path] != null) byPath[path]!];
     if (restored.isEmpty) return;
+    if (hasTrack || _userStarted) return;
+    _userPaused = true;
     queue = restored;
     index = (prefs.getInt('sessionIndex') ?? 0).clamp(0, queue.length - 1);
     shuffle = prefs.getBool('sessionShuffle') ?? false;
@@ -694,7 +736,7 @@ class PlayerController extends ChangeNotifier {
           await player.seek(position).timeout(const Duration(seconds: 2));
         } catch (_) {}
       }
-      if (play) await resumePlayback();
+      if (play) await resumePlayback(force: true);
     } catch (_) {
       if (gen != _loadGen) return;
       _loadedPath = null;
@@ -743,14 +785,19 @@ class PlayerController extends ChangeNotifier {
       // Pause (and some focus glitches) can emit "completed" with the playhead
       // still in the middle. Restarting would both jump to 0:00 and, after a
       // stop(), leave ExoPlayer silent until the app is killed.
-      if (_userPaused) {
-        final restore = _lastPosition;
-        if (restore.inMilliseconds > 400 && player.position.inMilliseconds < 400) {
-          try {
-            await player.seek(restore).timeout(const Duration(milliseconds: 400));
-          } catch (_) {}
-        }
+      final restore = _heldPosition();
+      if (restore.inMilliseconds > 400 && player.position.inMilliseconds < 400) {
+        try {
+          await player.seek(restore).timeout(const Duration(milliseconds: 400));
+        } catch (_) {}
       }
+      final duration = current?.durationMs ?? 0;
+      final midTrack = !_userPaused &&
+          hasTrack &&
+          duration > 1500 &&
+          restore.inMilliseconds > 400 &&
+          restore.inMilliseconds < duration - 1500;
+      if (midTrack) unawaited(resumePlayback());
       return;
     }
     _handlingComplete = true;
@@ -767,7 +814,7 @@ class PlayerController extends ChangeNotifier {
         try {
           await player.seek(Duration.zero).timeout(const Duration(milliseconds: 400));
           _lastPosition = Duration.zero;
-          await resumePlayback(limit: const Duration(milliseconds: 800));
+          await resumePlayback(force: true);
           if (player.processingState != ProcessingState.completed) return;
         } catch (_) {}
         await _loadCurrent(play: true);
@@ -886,6 +933,7 @@ class PlayerController extends ChangeNotifier {
 
   @override
   void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
     _flushListenClock();
     _sleepTimer?.cancel();
     unawaited(_noisySub?.cancel());

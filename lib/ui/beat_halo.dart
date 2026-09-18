@@ -36,7 +36,8 @@ class BeatHalo extends StatefulWidget {
   State<BeatHalo> createState() => _BeatHaloState();
 }
 
-class _BeatHaloState extends State<BeatHalo> with SingleTickerProviderStateMixin {
+class _BeatHaloState extends State<BeatHalo>
+    with SingleTickerProviderStateMixin, WidgetsBindingObserver {
   static const _methods = MethodChannel('com.nullmp3.nullmp3/halo');
   static const _events = EventChannel('com.nullmp3.nullmp3/haloEvents');
   final GlobalKey _coverKey = GlobalKey();
@@ -53,6 +54,7 @@ class _BeatHaloState extends State<BeatHalo> with SingleTickerProviderStateMixin
   int _rimGen = 0;
   int _artGen = -1;
   bool _live = false;
+  bool _backgrounded = false;
   DateTime? _lastDataAt;
   DateTime? _restartAt;
   List<Color> _rim = const [];
@@ -62,6 +64,7 @@ class _BeatHaloState extends State<BeatHalo> with SingleTickerProviderStateMixin
   @override
   void initState() {
     super.initState();
+    WidgetsBinding.instance.addObserver(this);
     _sessionId = widget.sessionId;
     _ticker = createTicker(_onTick)..start();
     _sessionSub = widget.sessionIds?.listen(_onSession);
@@ -74,6 +77,27 @@ class _BeatHaloState extends State<BeatHalo> with SingleTickerProviderStateMixin
     }
     _scheduleCapture();
     unawaited(_loadRim());
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    // `inactive` also fires for the mic privacy chip and focus flickers.
+    // Treating that as background left the halo paused with no resumed event.
+    if (state == AppLifecycleState.resumed) {
+      _backgrounded = false;
+      _live = false;
+      if (widget.playing && widget.enabled) _scheduleCapture(force: true);
+      return;
+    }
+    if (state != AppLifecycleState.paused && state != AppLifecycleState.hidden) {
+      return;
+    }
+    _backgrounded = true;
+    _startTimer?.cancel();
+    _live = false;
+    if (!kIsWeb && defaultTargetPlatform == TargetPlatform.android) {
+      unawaited(_methods.invokeMethod<void>('pause'));
+    }
   }
 
   @override
@@ -106,6 +130,7 @@ class _BeatHaloState extends State<BeatHalo> with SingleTickerProviderStateMixin
 
   @override
   void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
     _startTimer?.cancel();
     ArtworkStore.instance.removeListener(_onArtwork);
     _sub?.cancel();
@@ -148,13 +173,13 @@ class _BeatHaloState extends State<BeatHalo> with SingleTickerProviderStateMixin
 
   void _scheduleCapture({bool force = false}) {
     _startTimer?.cancel();
-    if (!widget.enabled || !widget.playing) {
+    if (_backgrounded || !widget.enabled || !widget.playing) {
       _live = false;
       return;
     }
     if (!force && _live) return;
-    _startTimer = Timer(Duration(milliseconds: force ? 80 : 500), () {
-      if (!mounted || !widget.playing || !widget.enabled) return;
+    _startTimer = Timer(Duration(milliseconds: force ? 80 : 120), () {
+      if (!mounted || _backgrounded || !widget.playing || !widget.enabled) return;
       if (!force && _live) return;
       unawaited(_syncCapture(force: force));
     });
@@ -180,21 +205,25 @@ class _BeatHaloState extends State<BeatHalo> with SingleTickerProviderStateMixin
   }
 
   void _maybeRestartCapture() {
+    if (_backgrounded) return;
     if (!widget.playing || !widget.enabled) return;
+    if (_startTimer?.isActive == true) return;
     final now = DateTime.now();
-    if (_restartAt != null && now.difference(_restartAt!) < const Duration(seconds: 3)) return;
+    if (_restartAt == null) return;
+    if (now.difference(_restartAt!) < const Duration(milliseconds: 1200)) return;
     final last = _lastDataAt;
-    final stale = last == null
-        ? _live && _restartAt != null && now.difference(_restartAt!) > const Duration(seconds: 2)
-        : now.difference(last) > const Duration(seconds: 2);
-    if (!stale) return;
+    final fresh = last != null && now.difference(last) < const Duration(seconds: 2);
+    if (fresh) return;
     _live = false;
-    _scheduleCapture(force: true);
+    final hard = last == null
+        ? now.difference(_restartAt!) > const Duration(seconds: 3)
+        : now.difference(last) > const Duration(seconds: 4);
+    _scheduleCapture(force: hard);
   }
 
   Future<void> _syncCapture({bool force = false}) async {
     final gen = ++_syncGen;
-    if (kIsWeb || !widget.enabled || !widget.playing) {
+    if (kIsWeb || _backgrounded || !widget.enabled || !widget.playing) {
       return;
     }
     if (!force && _live) return;
@@ -210,9 +239,13 @@ class _BeatHaloState extends State<BeatHalo> with SingleTickerProviderStateMixin
           }) ??
           false;
       if (!mounted || gen != _syncGen) return;
-      _live = ok;
       _restartAt = DateTime.now();
-      if (force) _lastDataAt = null;
+      if (!ok) {
+        _live = false;
+      } else if (force) {
+        _live = false;
+        _lastDataAt = null;
+      }
     } catch (_) {
       _live = false;
     }

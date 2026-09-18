@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 
@@ -57,12 +59,12 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
       await ArtworkStore.instance.init();
       await PlaybackCache.init();
       await player.init();
-      await player.restoreSession();
     } catch (error, stack) {
       debugPrint('Startup failed: $error\n$stack');
     }
     if (!mounted) return;
-    await _scan();
+    unawaited(player.restoreSession());
+    unawaited(_scan());
   }
 
   Future<void> _scan({List<String> extraFiles = const []}) async {

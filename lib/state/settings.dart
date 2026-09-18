@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 
@@ -41,6 +42,7 @@ class SettingsController extends ChangeNotifier {
   static const _kStatsEnabled = 'statsEnabled';
   static const _kBeatHalo = 'beatHalo';
   static const _kOffline = 'offlineMode';
+  static const _kAskedAllFiles = 'askedAllFiles';
 
   late SharedPreferences _prefs;
 
@@ -139,6 +141,7 @@ class SettingsController extends ChangeNotifier {
     statsEnabled = _prefs.getBool(_kStatsEnabled) ?? true;
     beatHalo = _prefs.getBool(_kBeatHalo) ?? false;
     offlineMode = _prefs.getBool(_kOffline) ?? false;
+    _askedAllFiles = _prefs.getBool(_kAskedAllFiles) ?? false;
     NetworkGate.offline = offlineMode;
     eqEnabled = _prefs.getBool(_kEqOn) ?? true;
     eqPreset = _prefs.getString(_kEqPreset) ?? 'Normal';
@@ -406,17 +409,29 @@ class SettingsController extends ChangeNotifier {
     if (kIsWeb) return true;
     if (Platform.isWindows || Platform.isLinux || Platform.isMacOS) return true;
     try {
-      var status = await Permission.audio.request();
+      var status = await Permission.audio.status;
+      if (!status.isGranted && !status.isLimited) {
+        status = await Permission.audio.request().timeout(
+          const Duration(seconds: 6),
+          onTimeout: () => status,
+        );
+      }
       if (!_askedAllFiles) {
         _askedAllFiles = true;
+        await _prefs.setBool(_kAskedAllFiles, true);
         final allFiles = await Permission.manageExternalStorage.status;
         if (!allFiles.isGranted) {
-          await Permission.manageExternalStorage.request();
+          unawaited(Permission.manageExternalStorage.request());
         }
       }
       if (status.isGranted || status.isLimited) return true;
-      status = await Permission.storage.request();
-      return status.isGranted || status.isLimited;
+      final storage = await Permission.storage.status;
+      if (storage.isGranted || storage.isLimited) return true;
+      final requested = await Permission.storage.request().timeout(
+        const Duration(seconds: 6),
+        onTimeout: () => storage,
+      );
+      return requested.isGranted || requested.isLimited;
     } catch (_) {
       return true;
     }

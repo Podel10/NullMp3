@@ -4,7 +4,9 @@ import android.app.Activity
 import android.content.ActivityNotFoundException
 import android.content.ContentUris
 import android.content.ContentValues
+import android.content.Context
 import android.content.Intent
+import android.media.AudioManager
 import android.net.Uri
 import android.os.Build
 import android.os.Bundle
@@ -32,6 +34,16 @@ class MainActivity : FlutterActivity() {
     // the audio editor.
     private val gifExecutor = Executors.newSingleThreadExecutor()
     private val mainHandler = Handler(Looper.getMainLooper())
+
+    override fun onPause() {
+        AudioHalo.pause()
+        super.onPause()
+    }
+
+    override fun onDestroy() {
+        AudioHalo.pause()
+        super.onDestroy()
+    }
 
     override fun configureFlutterEngine(flutterEngine: FlutterEngine) {
         super.configureFlutterEngine(flutterEngine)
@@ -266,6 +278,14 @@ class MainActivity : FlutterActivity() {
                     } catch (_: Exception) {
                     }
                     result.success(null)
+                }
+                "inVoiceCall" -> {
+                    val mode = (getSystemService(Context.AUDIO_SERVICE) as? AudioManager)?.mode
+                    result.success(
+                        mode == AudioManager.MODE_IN_CALL ||
+                            mode == AudioManager.MODE_IN_COMMUNICATION ||
+                            mode == AudioManager.MODE_RINGTONE,
+                    )
                 }
                 else -> result.notImplemented()
             }

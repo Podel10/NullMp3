@@ -34,12 +34,12 @@ object AudioHalo : EventChannel.StreamHandler {
         synchronized(lock) {
             if (id <= 0) return false
             if (!force && visualizer != null && sessionId == id) {
-                try {
-                    val vis = visualizer ?: return attachLocked(id)
-                    if (!vis.enabled) vis.enabled = true
-                    if (vis.enabled) return true
+                val rebound = try {
+                    bindCaptureLocked(visualizer!!)
                 } catch (_: Exception) {
+                    false
                 }
+                if (rebound) return true
             }
             stopCaptureLocked()
             return attachLocked(id)
@@ -47,7 +47,13 @@ object AudioHalo : EventChannel.StreamHandler {
     }
 
     fun pause() {
-        // no-op — toggling or releasing the effect mutes ExoPlayer
+        synchronized(lock) {
+            try {
+                visualizer?.setDataCaptureListener(null, 0, false, false)
+            } catch (_: Exception) {
+            }
+            // Keep the effect attached. enabled=false / release mutes ExoPlayer.
+        }
     }
 
     fun stop() {
@@ -66,38 +72,10 @@ object AudioHalo : EventChannel.StreamHandler {
                 vis.scalingMode = Visualizer.SCALING_MODE_NORMALIZED
             } catch (_: Exception) {
             }
-            val rate = max(Visualizer.getMaxCaptureRate() / 2, 20000)
-            vis.setDataCaptureListener(
-                object : Visualizer.OnDataCaptureListener {
-                    override fun onWaveFormDataCapture(
-                        visualizer: Visualizer?,
-                        waveform: ByteArray?,
-                        samplingRate: Int,
-                    ) {
-                        if (waveform == null || waveform.isEmpty()) return
-                        if (SystemClock.uptimeMillis() - lastFftAt < 220) return
-                        emitWave(waveform)
-                    }
-
-                    override fun onFftDataCapture(
-                        visualizer: Visualizer?,
-                        fft: ByteArray?,
-                        samplingRate: Int,
-                    ) {
-                        if (fft == null || fft.size < 8) return
-                        lastFftAt = SystemClock.uptimeMillis()
-                        emitFft(fft)
-                    }
-                },
-                rate,
-                true,
-                true,
-            )
-            vis.enabled = true
             visualizer = vis
             sessionId = id
             resetEnvelope()
-            true
+            bindCaptureLocked(vis)
         } catch (error: Exception) {
             Log.w(TAG, "halo visualizer failed session=$id", error)
             stopCaptureLocked()
@@ -199,6 +177,7 @@ object AudioHalo : EventChannel.StreamHandler {
     }
 
     private fun emit(peaks: ArrayList<Double>, energy: Double, bass: Double) {
+        val out = sink ?: return
         bassHistory[bassIndex] = bass
         bassIndex = (bassIndex + 1) % HISTORY
         if (bassCount < HISTORY) bassCount++
@@ -234,7 +213,56 @@ object AudioHalo : EventChannel.StreamHandler {
             "strength" to if (beat) max(strength, 0.55) else strength,
             "ready" to primed,
         )
-        mainHandler.post { sink?.success(payload) }
+        mainHandler.post {
+            try {
+                out.success(payload)
+            } catch (_: Exception) {
+            }
+        }
+    }
+
+    private val captureListener = object : Visualizer.OnDataCaptureListener {
+        override fun onWaveFormDataCapture(
+            visualizer: Visualizer?,
+            waveform: ByteArray?,
+            samplingRate: Int,
+        ) {
+            if (waveform == null || waveform.isEmpty()) return
+            if (SystemClock.uptimeMillis() - lastFftAt < 220) return
+            emitWave(waveform)
+        }
+
+        override fun onFftDataCapture(
+            visualizer: Visualizer?,
+            fft: ByteArray?,
+            samplingRate: Int,
+        ) {
+            if (fft == null || fft.size < 8) return
+            lastFftAt = SystemClock.uptimeMillis()
+            emitFft(fft)
+        }
+    }
+
+    private fun bindCaptureLocked(vis: Visualizer): Boolean {
+        val rate = max(Visualizer.getMaxCaptureRate() / 2, 20000)
+        try {
+            vis.setDataCaptureListener(null, 0, false, false)
+        } catch (_: Exception) {
+        }
+        try {
+            vis.setDataCaptureListener(captureListener, rate, false, true)
+        } catch (_: Exception) {
+            return false
+        }
+        try {
+            if (!vis.enabled) vis.enabled = true
+        } catch (_: Exception) {
+        }
+        return try {
+            vis.enabled
+        } catch (_: Exception) {
+            false
+        }
     }
 
     private fun stopCaptureLocked() {
@@ -251,11 +279,20 @@ object AudioHalo : EventChannel.StreamHandler {
 
     override fun onListen(arguments: Any?, events: EventChannel.EventSink?) {
         sink = events
+        synchronized(lock) {
+            val vis = visualizer
+            if (vis != null && sessionId > 0) {
+                try {
+                    bindCaptureLocked(vis)
+                } catch (_: Exception) {
+                }
+            }
+        }
     }
 
     override fun onCancel(arguments: Any?) {
-        // Keep the Visualizer on the audio session. Releasing it from here
-        // (Now Playing popped, EventChannel cancelled) mutes ExoPlayer.
+        // Detach capture only. Releasing the effect mutes ExoPlayer.
         sink = null
+        pause()
     }
 }
