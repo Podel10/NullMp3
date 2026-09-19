@@ -121,20 +121,7 @@ class SettingsScreen extends StatelessWidget {
   Future<void> _chooseLanguage(BuildContext context, SettingsController settings) async {
     final selected = await showDialog<AppLanguage>(
       context: context,
-      builder: (context) {
-        final s = context.s;
-        return SimpleDialog(
-          title: Text(s.chooseLanguage),
-          children: [
-            for (final language in AppLanguage.values)
-              ListTile(
-                leading: Icon(settings.language == language ? Icons.check_rounded : null),
-                title: Text(language.nativeName),
-                onTap: () => Navigator.pop(context, language),
-              ),
-          ],
-        );
-      },
+      builder: (context) => _LanguageDialog(current: settings.language),
     );
     if (selected != null) await settings.setLanguage(selected);
   }
@@ -164,6 +151,82 @@ class _FaqTile extends StatelessWidget {
           ),
         ),
       ],
+    );
+  }
+}
+
+class _LanguageDialog extends StatefulWidget {
+  const _LanguageDialog({required this.current});
+  final AppLanguage current;
+
+  @override
+  State<_LanguageDialog> createState() => _LanguageDialogState();
+}
+
+class _LanguageDialogState extends State<_LanguageDialog> {
+  String _query = '';
+
+  @override
+  Widget build(BuildContext context) {
+    final s = context.s;
+    final q = _query.trim().toLowerCase();
+    final items = AppLanguage.all.where((language) {
+      if (q.isEmpty) return true;
+      return language.nativeName.toLowerCase().contains(q) ||
+          language.code.toLowerCase().contains(q);
+    }).toList(growable: false);
+    return Dialog(
+      child: SizedBox(
+        width: 420,
+        height: 520,
+        child: Column(
+          children: [
+            Padding(
+              padding: const EdgeInsets.fromLTRB(20, 16, 12, 8),
+              child: Row(
+                children: [
+                  Expanded(
+                    child: Text(
+                      s.chooseLanguage,
+                      style: Theme.of(context).textTheme.titleLarge,
+                    ),
+                  ),
+                  IconButton(
+                    onPressed: () => Navigator.pop(context),
+                    icon: const Icon(Icons.close_rounded),
+                  ),
+                ],
+              ),
+            ),
+            Padding(
+              padding: const EdgeInsets.fromLTRB(16, 0, 16, 8),
+              child: TextField(
+                autofocus: true,
+                decoration: InputDecoration(
+                  prefixIcon: const Icon(Icons.search_rounded),
+                  hintText: s.searchLanguages,
+                ),
+                onChanged: (value) => setState(() => _query = value),
+              ),
+            ),
+            Expanded(
+              child: ListView.builder(
+                itemCount: items.length,
+                itemBuilder: (context, index) {
+                  final language = items[index];
+                  final selected = language == widget.current;
+                  return ListTile(
+                    leading: Icon(selected ? Icons.check_rounded : null),
+                    title: Text(language.nativeName),
+                    subtitle: Text(language.code),
+                    onTap: () => Navigator.pop(context, language),
+                  );
+                },
+              ),
+            ),
+          ],
+        ),
+      ),
     );
   }
 }

@@ -323,10 +323,10 @@ class MiniPlayer extends StatelessWidget {
           child: Column(
             children: [
               StreamBuilder<Duration>(
-                stream: player.player.positionStream,
+                stream: player.positionClock,
                 builder: (context, snapshot) {
                   final pos = snapshot.data ?? Duration.zero;
-                  final dur = player.player.duration ?? Duration.zero;
+                  final dur = player.totalDuration;
                   final value = dur.inMilliseconds == 0
                       ? 0.0
                       : (pos.inMilliseconds / dur.inMilliseconds).clamp(0.0, 1.0);
@@ -393,10 +393,10 @@ class SeekBar extends StatelessWidget {
   Widget build(BuildContext context) {
     final player = contextPlayer(context);
     return StreamBuilder<Duration>(
-      stream: player.player.positionStream,
+      stream: player.positionClock,
       builder: (context, snapshot) {
         final position = snapshot.data ?? Duration.zero;
-        final duration = player.player.duration ?? Duration.zero;
+        final duration = player.totalDuration;
         return Column(
           children: [
             Slider(

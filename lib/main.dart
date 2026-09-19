@@ -4,6 +4,7 @@ import 'package:flutter_localizations/flutter_localizations.dart';
 import 'package:just_audio_media_kit/just_audio_media_kit.dart';
 import 'package:provider/provider.dart';
 
+import 'l10n/app_language.dart';
 import 'state/library.dart';
 import 'state/player.dart';
 import 'state/settings.dart';
@@ -55,11 +56,20 @@ class NullMp3App extends StatelessWidget {
       title: 'Null MP3',
       debugShowCheckedModeBanner: false,
       locale: settings.language.locale,
-      supportedLocales: const [
-        Locale('en'),
-        Locale('ru'),
-        Locale('zh', 'CN'),
-      ],
+      supportedLocales: AppLanguage.all.map((item) => item.locale).toList(growable: false),
+      localeResolutionCallback: (locale, supported) {
+        final selected = settings.language.locale;
+        for (final item in supported) {
+          if (item.languageCode == selected.languageCode &&
+              item.countryCode == selected.countryCode) {
+            return item;
+          }
+        }
+        for (final item in supported) {
+          if (item.languageCode == selected.languageCode) return item;
+        }
+        return const Locale('en');
+      },
       localizationsDelegates: const [
         GlobalMaterialLocalizations.delegate,
         GlobalWidgetsLocalizations.delegate,

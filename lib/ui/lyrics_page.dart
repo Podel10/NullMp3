@@ -476,7 +476,7 @@ class _SyncedLyricsState extends State<_SyncedLyrics> {
   Widget build(BuildContext context) {
     final player = contextPlayer(context);
     return StreamBuilder<Duration>(
-      stream: player.player.positionStream,
+      stream: player.positionClock,
       builder: (context, snapshot) {
         final pos = snapshot.data ?? Duration.zero;
         var active = 0;

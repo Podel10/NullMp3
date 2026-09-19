@@ -529,6 +529,7 @@ class _VideoCoverState extends State<_VideoCover> {
     _rimTimer = null;
     final player = _player;
     _player = null;
+    player?.removeListener(_onVideoTick);
     player?.dispose();
     super.dispose();
   }
@@ -543,6 +544,7 @@ class _VideoCoverState extends State<_VideoCover> {
     if (mounted) setState(() {});
     if (old != null) {
       WidgetsBinding.instance.addPostFrameCallback((_) {
+        old.removeListener(_onVideoTick);
         old.dispose();
       });
     }
@@ -557,17 +559,41 @@ class _VideoCoverState extends State<_VideoCover> {
         setState(() => _failed = true);
         return;
       }
-      final player = VideoPlayerController.file(
-        file,
-        videoPlayerOptions: VideoPlayerOptions(mixWithOthers: true),
-      );
-      await player.initialize();
+      VideoPlayerController? player;
+      try {
+        player = VideoPlayerController.file(
+          file,
+          videoPlayerOptions: VideoPlayerOptions(
+            mixWithOthers: true,
+            allowBackgroundPlayback: true,
+          ),
+        );
+        await player.initialize();
+      } catch (_) {
+        await player?.dispose();
+        player = null;
+        final uri = await playbackContentUri(file.path) ??
+            await playbackContentUri(widget.artworkPath ?? '');
+        if (uri == null) {
+          if (mounted && identical(_token, token)) setState(() => _failed = true);
+          return;
+        }
+        player = VideoPlayerController.contentUri(
+          Uri.parse(uri),
+          videoPlayerOptions: VideoPlayerOptions(
+            mixWithOthers: true,
+            allowBackgroundPlayback: true,
+          ),
+        );
+        await player.initialize();
+      }
       if (!mounted || !identical(_token, token)) {
         await player.dispose();
         return;
       }
       await player.setVolume(0);
       await player.setLooping(true);
+      player.addListener(_onVideoTick);
       _player = player;
       setState(() {});
       await _syncPlayback();
@@ -583,6 +609,25 @@ class _VideoCoverState extends State<_VideoCover> {
       if (!mounted || !identical(_token, token) || poster == null) return;
       setState(() => _poster = poster);
     } catch (_) {}
+  }
+
+  void _onVideoTick() {
+    final player = _player;
+    if (player == null || !widget.playing || !widget.animate) return;
+    final value = player.value;
+    if (value.isPlaying || !value.isInitialized) return;
+    if (value.duration <= Duration.zero) return;
+    if (value.position < value.duration - const Duration(milliseconds: 400) &&
+        !value.isCompleted) {
+      return;
+    }
+    unawaited(() async {
+      try {
+        await player.setVolume(0);
+        await player.seekTo(Duration.zero);
+        await player.play();
+      } catch (_) {}
+    }());
   }
 
   Future<void> _syncPlayback() async {
@@ -682,6 +727,13 @@ Future<File?> _videoFile(Uint8List bytes, String? trackPath) async {
     try {
       final cached = await ArtworkStore.instance.mediaFile(trackPath);
       if (cached != null) return cached;
+    } catch (_) {}
+    try {
+      final opened = await openPlaybackFile(trackPath);
+      if (opened != null && !opened.startsWith('content:')) {
+        final file = File(opened);
+        if (await file.exists() && await file.length() > 32) return file;
+      }
     } catch (_) {}
   }
   try {

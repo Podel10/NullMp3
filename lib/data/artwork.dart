@@ -107,6 +107,15 @@ class ArtworkStore extends ChangeNotifier {
   }
 
   Future<File?> mediaFile(String trackPath) async {
+    if (_isVideoPath(trackPath)) {
+      try {
+        final opened = await openPlaybackFile(trackPath);
+        if (opened != null && !opened.startsWith('content:')) {
+          final file = File(opened);
+          if (await file.exists() && await file.length() > 32) return file;
+        }
+      } catch (_) {}
+    }
     final key = _key(trackPath);
     for (final ext in const ['mp4', 'webm', 'bin']) {
       final file = _file(key, ext);
@@ -201,6 +210,16 @@ class ArtworkStore extends ChangeNotifier {
   Future<Uint8List?> _load(String trackPath) async {
     final gen = generationOf(trackPath);
     final key = _key(trackPath);
+    if (_isVideoPath(trackPath)) {
+      try {
+        final media = await mediaFile(trackPath);
+        if (media != null) {
+          final header = await _readPrefix(media, _videoHeader);
+          unawaited(poster(trackPath));
+          return _finishLoad(trackPath, gen, header);
+        }
+      } catch (_) {}
+    }
     final cached = await _existingFile(key);
     if (cached != null) {
       try {

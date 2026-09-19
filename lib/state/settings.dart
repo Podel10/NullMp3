@@ -5,6 +5,7 @@ import 'dart:io';
 import 'package:file_picker/file_picker.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:path/path.dart' as p;
 import 'package:path_provider/path_provider.dart';
 import 'package:permission_handler/permission_handler.dart';
@@ -161,6 +162,7 @@ class SettingsController extends ChangeNotifier {
     eqEnabled = _prefs.getBool(_kEqOn) ?? true;
     eqPreset = _prefs.getString(_kEqPreset) ?? 'Normal';
     language = AppLanguage.fromName(_prefs.getString(_kLanguage));
+    await L10n.ensure(language);
     final storedEq = _prefs.getString(_kEq);
     if (storedEq != null) {
       eqBands = List<double>.from((jsonDecode(storedEq) as List).map((e) => (e as num).toDouble()));
@@ -173,7 +175,8 @@ class SettingsController extends ChangeNotifier {
 
   Future<void> setLanguage(AppLanguage value) async {
     language = value;
-    await _prefs.setString(_kLanguage, value.name);
+    await L10n.ensure(value);
+    await _prefs.setString(_kLanguage, value.code);
     notifyListeners();
   }
 
@@ -327,6 +330,17 @@ class SettingsController extends ChangeNotifier {
   }
 
   Future<void> addFolder() async {
+    if (!kIsWeb && Platform.isAndroid) {
+      try {
+        final picked = await const MethodChannel('com.nullmp3.nullmp3/files')
+            .invokeMethod<String>('pickFolder')
+            .timeout(const Duration(seconds: 120));
+        if (picked != null && picked.isNotEmpty) {
+          await addFolderPath(picked);
+          return;
+        }
+      } catch (_) {}
+    }
     final path = await FilePicker.getDirectoryPath();
     if (path == null) return;
     await addFolderPath(path);
@@ -437,13 +451,23 @@ class SettingsController extends ChangeNotifier {
           onTimeout: () => status,
         );
       }
-      if (!_askedAllFiles) {
+      try {
+        final video = await Permission.videos.status;
+        if (!video.isGranted && !video.isLimited) {
+          await Permission.videos.request().timeout(
+            const Duration(seconds: 6),
+            onTimeout: () => video,
+          );
+        }
+      } catch (_) {}
+      final allFiles = await Permission.manageExternalStorage.status;
+      if (!allFiles.isGranted) {
         _askedAllFiles = true;
         await _prefs.setBool(_kAskedAllFiles, true);
-        final allFiles = await Permission.manageExternalStorage.status;
-        if (!allFiles.isGranted) {
-          unawaited(Permission.manageExternalStorage.request());
-        }
+        await Permission.manageExternalStorage.request().timeout(
+          const Duration(seconds: 20),
+          onTimeout: () => allFiles,
+        );
       }
       if (status.isGranted || status.isLimited) return true;
       final storage = await Permission.storage.status;

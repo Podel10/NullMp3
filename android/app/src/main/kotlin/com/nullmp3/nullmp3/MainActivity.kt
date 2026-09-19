@@ -6,13 +6,19 @@ import android.content.ContentUris
 import android.content.ContentValues
 import android.content.Context
 import android.content.Intent
+import android.media.AudioAttributes
+import android.media.MediaPlayer
 import android.net.Uri
 import android.os.Build
 import android.os.Bundle
+import android.os.Environment
 import android.os.Handler
 import android.os.Looper
+import android.os.ParcelFileDescriptor
+import android.provider.DocumentsContract
 import android.provider.MediaStore
 import android.provider.OpenableColumns
+import android.provider.Settings
 import io.flutter.embedding.android.FlutterActivity
 import io.flutter.embedding.engine.FlutterEngine
 import io.flutter.embedding.engine.FlutterEngineCache
@@ -31,8 +37,12 @@ class MainActivity : FlutterActivity() {
     private val sessionChannelName = "com.nullmp3.nullmp3/session"
     private val deleteRequestCode = 4401
     private val pickImageRequestCode = 4402
+    private val pickFolderRequestCode = 4403
     private var pendingDelete: MethodChannel.Result? = null
     private var pendingPickImage: MethodChannel.Result? = null
+    private var pendingPickFolder: MethodChannel.Result? = null
+    private var nativePlayer: MediaPlayer? = null
+    private var nativePfd: ParcelFileDescriptor? = null
     private val editorExecutor = Executors.newSingleThreadExecutor()
     // GIF jobs run for a while, so they get their own lane and never hold up
     // the audio editor.
@@ -80,6 +90,43 @@ class MainActivity : FlutterActivity() {
                         }
                     }
                     "pickImage" -> pickImage(result)
+                    "pickFolder" -> pickFolder(result)
+                    "requestAllFiles" -> result.success(ensureAllFiles())
+                    "nativePlay" -> {
+                        val path = call.argument<String>("path")
+                        if (path.isNullOrEmpty()) {
+                            result.error("bad_path", "Missing path", null)
+                        } else {
+                            result.success(nativePlay(path))
+                        }
+                    }
+                    "nativePause" -> {
+                        try {
+                            nativePlayer?.pause()
+                        } catch (_: Exception) {
+                        }
+                        result.success(null)
+                    }
+                    "nativeResume" -> {
+                        try {
+                            nativePlayer?.start()
+                        } catch (_: Exception) {
+                        }
+                        result.success(null)
+                    }
+                    "nativeStop" -> {
+                        nativeStop()
+                        result.success(null)
+                    }
+                    "nativeSeek" -> {
+                        val ms = call.argument<Number>("positionMs")?.toInt() ?: 0
+                        try {
+                            nativePlayer?.seekTo(ms.coerceAtLeast(0))
+                        } catch (_: Exception) {
+                        }
+                        result.success(null)
+                    }
+                    "nativeState" -> result.success(nativeState())
                     "waveform" -> {
                         val path = call.argument<String>("path")
                         val bars = call.argument<Int>("bars") ?: 800
@@ -239,6 +286,14 @@ class MainActivity : FlutterActivity() {
                             result.success(findMediaUri(path)?.toString())
                         }
                     }
+                    "openPlayback" -> {
+                        val path = call.argument<String>("path")
+                        if (path.isNullOrEmpty()) {
+                            result.error("bad_path", "Missing path", null)
+                        } else {
+                            result.success(openPlayback(path))
+                        }
+                    }
                     "makeGif" -> {
                         val path = call.argument<String>("path")
                         val startMs = (call.argument<Number>("startMs")?.toLong()) ?: 0L
@@ -334,6 +389,7 @@ class MainActivity : FlutterActivity() {
 
     private val audioExtensions = setOf(
         ".mp3", ".m4a", ".aac", ".flac", ".wav", ".ogg", ".opus", ".wma", ".aiff", ".aif", ".alac",
+        ".mp4", ".m4v", ".webm", ".mkv", ".3gp",
     )
 
     private fun listAudio(folders: List<String>, result: MethodChannel.Result) {
@@ -428,25 +484,64 @@ class MainActivity : FlutterActivity() {
         } else {
             projection.add(MediaStore.Audio.Media.DATA)
         }
+        queryCollection(
+            folders,
+            items,
+            MediaStore.Audio.Media.EXTERNAL_CONTENT_URI,
+            projection,
+            null,
+        )
+        queryVideos(folders, items)
+    }
+
+    private fun queryVideos(folders: List<String>, items: LinkedHashMap<String, HashMap<String, Any?>>) {
+        val projection = mutableListOf(
+            MediaStore.Video.Media._ID,
+            MediaStore.Video.Media.TITLE,
+            MediaStore.Video.Media.DURATION,
+            MediaStore.Video.Media.DATE_MODIFIED,
+            MediaStore.Video.Media.DISPLAY_NAME,
+        )
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+            projection.add(MediaStore.Video.Media.RELATIVE_PATH)
+        } else {
+            projection.add(MediaStore.Video.Media.DATA)
+        }
+        queryCollection(
+            folders,
+            items,
+            MediaStore.Video.Media.EXTERNAL_CONTENT_URI,
+            projection,
+            null,
+        )
+    }
+
+    private fun queryCollection(
+        folders: List<String>,
+        items: LinkedHashMap<String, HashMap<String, Any?>>,
+        collection: Uri,
+        projection: List<String>,
+        selection: String?,
+    ) {
         try {
             contentResolver.query(
-                MediaStore.Audio.Media.EXTERNAL_CONTENT_URI,
+                collection,
                 projection.toTypedArray(),
-                "${MediaStore.Audio.Media.IS_MUSIC}!=0",
+                selection,
                 null,
-                "${MediaStore.Audio.Media.TITLE} COLLATE NOCASE ASC",
+                "${MediaStore.MediaColumns.TITLE} COLLATE NOCASE ASC",
             )?.use { cursor ->
-                val idI = cursor.getColumnIndex(MediaStore.Audio.Media._ID)
-                val titleI = cursor.getColumnIndex(MediaStore.Audio.Media.TITLE)
+                val idI = cursor.getColumnIndex(MediaStore.MediaColumns._ID)
+                val titleI = cursor.getColumnIndex(MediaStore.MediaColumns.TITLE)
                 val artistI = cursor.getColumnIndex(MediaStore.Audio.Media.ARTIST)
                 val albumI = cursor.getColumnIndex(MediaStore.Audio.Media.ALBUM)
-                val durationI = cursor.getColumnIndex(MediaStore.Audio.Media.DURATION)
-                val modifiedI = cursor.getColumnIndex(MediaStore.Audio.Media.DATE_MODIFIED)
+                val durationI = cursor.getColumnIndex(MediaStore.MediaColumns.DURATION)
+                val modifiedI = cursor.getColumnIndex(MediaStore.MediaColumns.DATE_MODIFIED)
                 val trackI = cursor.getColumnIndex(MediaStore.Audio.Media.TRACK)
                 val yearI = cursor.getColumnIndex(MediaStore.Audio.Media.YEAR)
-                val displayI = cursor.getColumnIndex(MediaStore.Audio.Media.DISPLAY_NAME)
-                val relativeI = cursor.getColumnIndex(MediaStore.Audio.Media.RELATIVE_PATH)
-                val pathI = cursor.getColumnIndex(MediaStore.Audio.Media.DATA)
+                val displayI = cursor.getColumnIndex(MediaStore.MediaColumns.DISPLAY_NAME)
+                val relativeI = cursor.getColumnIndex(MediaStore.MediaColumns.RELATIVE_PATH)
+                val pathI = cursor.getColumnIndex(MediaStore.MediaColumns.DATA)
                 while (cursor.moveToNext()) {
                     val relative = if (relativeI >= 0) cursor.getString(relativeI) else null
                     val display = if (displayI >= 0) cursor.getString(displayI) else null
@@ -455,7 +550,7 @@ class MainActivity : FlutterActivity() {
                     if (folders.isNotEmpty() && !pathIsUnderFolders(path, relative, folders)) continue
                     val id = if (idI >= 0 && !cursor.isNull(idI)) cursor.getLong(idI) else -1L
                     val uri = if (id >= 0) {
-                        ContentUris.withAppendedId(MediaStore.Audio.Media.EXTERNAL_CONTENT_URI, id).toString()
+                        ContentUris.withAppendedId(collection, id).toString()
                     } else {
                         null
                     }
@@ -525,7 +620,7 @@ class MainActivity : FlutterActivity() {
     private fun isAudioFile(name: String?, mime: String?): Boolean {
         val type = mime?.lowercase() ?: ""
         if (type.contains("mpegurl") || type.contains("x-mpegurl")) return false
-        if (type.startsWith("audio/")) return true
+        if (type.startsWith("audio/") || type.startsWith("video/")) return true
         val lower = name?.lowercase() ?: return false
         return audioExtensions.any { lower.endsWith(it) }
     }
@@ -620,20 +715,269 @@ class MainActivity : FlutterActivity() {
         return file.exists() && file.delete()
     }
 
+    private fun nativeStop() {
+        try {
+            nativePlayer?.reset()
+        } catch (_: Exception) {
+        }
+        try {
+            nativePlayer?.release()
+        } catch (_: Exception) {
+        }
+        nativePlayer = null
+        try {
+            nativePfd?.close()
+        } catch (_: Exception) {
+        }
+        nativePfd = null
+    }
+
+    private fun nativeState(): HashMap<String, Any?> {
+        val player = nativePlayer
+        return hashMapOf(
+            "playing" to try {
+                player?.isPlaying == true
+            } catch (_: Exception) {
+                false
+            },
+            "positionMs" to try {
+                player?.currentPosition ?: 0
+            } catch (_: Exception) {
+                0
+            },
+            "durationMs" to try {
+                player?.duration ?: 0
+            } catch (_: Exception) {
+                0
+            },
+        )
+    }
+
+    private fun nativePlay(path: String): HashMap<String, Any?> {
+        nativeStop()
+        val opened = openPlayback(path)
+        val uri = when {
+            opened.startsWith("content:") -> Uri.parse(opened)
+            else -> findTreeDocumentUri(path) ?: findMediaUri(path)
+        }
+        val attempts = mutableListOf<() -> Unit>()
+        if (opened.startsWith("content:")) {
+            attempts.add { setNativeSource(Uri.parse(opened)) }
+        }
+        if (!opened.startsWith("content:") && File(opened).canRead()) {
+            attempts.add { setNativeSource(opened) }
+        }
+        if (uri != null) {
+            attempts.add { setNativeSource(uri) }
+            attempts.add { setNativeFromPfd(uri) }
+        }
+        if (!opened.startsWith("content:")) {
+            attempts.add { setNativeSource(path) }
+        }
+        var started = false
+        for (attempt in attempts) {
+            nativeStop()
+            try {
+                attempt()
+                nativePlayer?.start()
+                started = nativePlayer?.isPlaying == true || (nativePlayer?.duration ?: 0) > 0
+                if (started) break
+            } catch (_: Exception) {
+                nativeStop()
+            }
+        }
+        val duration = try {
+            nativePlayer?.duration ?: 0
+        } catch (_: Exception) {
+            0
+        }
+        if (!started || nativePlayer == null) {
+            nativeStop()
+            return hashMapOf("ok" to false, "durationMs" to 0, "positionMs" to 0)
+        }
+        return hashMapOf("ok" to true, "durationMs" to duration, "positionMs" to 0)
+    }
+
+    private fun newNativePlayer(): MediaPlayer {
+        return MediaPlayer().apply {
+            setAudioAttributes(
+                AudioAttributes.Builder()
+                    .setUsage(AudioAttributes.USAGE_MEDIA)
+                    .setContentType(AudioAttributes.CONTENT_TYPE_MUSIC)
+                    .build(),
+            )
+            setVolume(1f, 1f)
+        }
+    }
+
+    private fun setNativeSource(source: String) {
+        val mp = newNativePlayer()
+        nativePlayer = mp
+        mp.setDataSource(source)
+        mp.prepare()
+    }
+
+    private fun setNativeSource(uri: Uri) {
+        val mp = newNativePlayer()
+        nativePlayer = mp
+        mp.setDataSource(applicationContext, uri)
+        mp.prepare()
+    }
+
+    private fun setNativeFromPfd(uri: Uri) {
+        val pfd = contentResolver.openFileDescriptor(uri, "r")
+            ?: throw IllegalStateException("no fd")
+        nativePfd = pfd
+        val mp = newNativePlayer()
+        nativePlayer = mp
+        mp.setDataSource(pfd.fileDescriptor)
+        mp.prepare()
+    }
+
+    private fun ensureAllFiles(): Boolean {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.R) return true
+        if (Environment.isExternalStorageManager()) return true
+        try {
+            startActivity(
+                Intent(Settings.ACTION_MANAGE_APP_ALL_FILES_ACCESS_PERMISSION).apply {
+                    data = Uri.parse("package:$packageName")
+                },
+            )
+        } catch (_: Exception) {
+            try {
+                startActivity(Intent(Settings.ACTION_MANAGE_ALL_FILES_ACCESS_PERMISSION))
+            } catch (_: Exception) {
+            }
+        }
+        return Environment.isExternalStorageManager()
+    }
+
+    private fun openPlayback(path: String): String {
+        val file = File(path)
+        val dest = File(
+            File(cacheDir, "playopen").apply { mkdirs() },
+            "${(path.hashCode().toLong() and 0xffffffffL).toString(16)}_${file.name.ifBlank { "media" }}",
+        )
+        val sourceLen = if (file.exists()) file.length() else -1L
+        if (sourceLen > 16 && dest.length() == sourceLen && fileReadable(dest)) {
+            return dest.absolutePath
+        }
+        val uris = listOfNotNull(findTreeDocumentUri(path), findMediaUri(path))
+        for (uri in uris) {
+            if (copyInto(dest) { openMediaStream(uri) }) return dest.absolutePath
+        }
+        if (fileReadable(file) && copyInto(dest) { file.inputStream() }) {
+            return dest.absolutePath
+        }
+        if (uris.isNotEmpty()) return uris.first().toString()
+        return if (fileReadable(dest) && dest.length() > 16) dest.absolutePath else path
+    }
+
+    private fun findTreeDocumentUri(path: String): Uri? {
+        val normalized = path.replace('\\', '/').trimEnd('/')
+        for (permission in contentResolver.persistedUriPermissions) {
+            if (!permission.isReadPermission) continue
+            val tree = permission.uri
+            if (!DocumentsContract.isTreeUri(tree)) continue
+            val folder = treeFolderPath(tree) ?: continue
+            val prefix = folder.trimEnd('/')
+            if (!normalized.equals(prefix, ignoreCase = true) &&
+                !normalized.startsWith("$prefix/", ignoreCase = true)
+            ) {
+                continue
+            }
+            val treeId = DocumentsContract.getTreeDocumentId(tree)
+            val rest = normalized.removePrefix(prefix).trimStart('/')
+            val docId = if (rest.isEmpty()) treeId else "$treeId/$rest"
+            return DocumentsContract.buildDocumentUriUsingTree(tree, docId)
+        }
+        return null
+    }
+
+    private fun treeFolderPath(treeUri: Uri): String? {
+        return try {
+            val id = DocumentsContract.getTreeDocumentId(treeUri)
+            val parts = id.split(":", limit = 2)
+            val volume = parts[0]
+            val relative = parts.getOrNull(1)?.trim('/') ?: ""
+            val root = if (volume.equals("primary", ignoreCase = true)) {
+                "/storage/emulated/0"
+            } else {
+                "/storage/$volume"
+            }
+            if (relative.isEmpty()) root else "$root/$relative"
+        } catch (_: Exception) {
+            null
+        }
+    }
+
+    private fun pickFolder(result: MethodChannel.Result) {
+        pendingPickFolder?.success(null)
+        pendingPickFolder = result
+        val intent = Intent(Intent.ACTION_OPEN_DOCUMENT_TREE).apply {
+            addFlags(
+                Intent.FLAG_GRANT_READ_URI_PERMISSION or
+                    Intent.FLAG_GRANT_PERSISTABLE_URI_PERMISSION or
+                    Intent.FLAG_GRANT_PREFIX_URI_PERMISSION,
+            )
+        }
+        try {
+            startActivityForResult(intent, pickFolderRequestCode)
+        } catch (_: Exception) {
+            pendingPickFolder = null
+            result.success(null)
+        }
+    }
+
+    private fun openMediaStream(uri: Uri): java.io.InputStream? {
+        try {
+            contentResolver.openInputStream(uri)?.let { return it }
+        } catch (_: Exception) {
+        }
+        try {
+            contentResolver.openAssetFileDescriptor(uri, "r")?.let { afd ->
+                return afd.createInputStream()
+            }
+        } catch (_: Exception) {
+        }
+        return try {
+            contentResolver.openFileDescriptor(uri, "r")?.let { pfd ->
+                ParcelFileDescriptor.AutoCloseInputStream(pfd)
+            }
+        } catch (_: Exception) {
+            null
+        }
+    }
+
+    private fun copyInto(dest: File, open: () -> java.io.InputStream?): Boolean {
+        return try {
+            open()?.use { input ->
+                dest.outputStream().use { output -> input.copyTo(output) }
+            }
+            fileReadable(dest)
+        } catch (_: Exception) {
+            false
+        }
+    }
+
+    private fun fileReadable(file: File): Boolean {
+        if (!file.exists() || file.length() <= 16) return false
+        return try {
+            file.inputStream().use { it.read() >= 0 }
+        } catch (_: Exception) {
+            false
+        }
+    }
+
     private fun findMediaUri(path: String): Uri? {
         val variants = pathVariants(path)
         val collections = mutableListOf(
             MediaStore.Audio.Media.EXTERNAL_CONTENT_URI,
+            MediaStore.Video.Media.EXTERNAL_CONTENT_URI,
             MediaStore.Files.getContentUri("external"),
         )
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
             collections.add(MediaStore.Downloads.EXTERNAL_CONTENT_URI)
-        }
-
-        for (collection in collections) {
-            for (variant in variants) {
-                queryUri(collection, MediaStore.MediaColumns.DATA, variant)?.let { return it }
-            }
         }
 
         val name = File(path).name
@@ -656,7 +1000,28 @@ class MainActivity : FlutterActivity() {
         }
 
         for (collection in collections) {
+            for (variant in variants) {
+                queryUri(collection, MediaStore.MediaColumns.DATA, variant)?.let { return it }
+            }
+        }
+
+        for (collection in collections) {
             queryUri(collection, MediaStore.MediaColumns.DISPLAY_NAME, name)?.let { return it }
+        }
+        val title = name.substringBeforeLast('.')
+        if (title.isNotEmpty() && title != name) {
+            for (collection in collections) {
+                queryUri(collection, MediaStore.MediaColumns.TITLE, title)?.let { return it }
+            }
+        }
+        if (name.isNotEmpty()) {
+            for (collection in collections) {
+                queryUri(
+                    collection,
+                    "${MediaStore.MediaColumns.DATA} LIKE ?",
+                    arrayOf("%/$name"),
+                )?.let { return it }
+            }
         }
         return null
     }
@@ -855,6 +1220,28 @@ class MainActivity : FlutterActivity() {
         if (requestCode == deleteRequestCode) {
             pendingDelete?.success(if (resultCode == Activity.RESULT_OK) "ok" else "cancelled")
             pendingDelete = null
+            return
+        }
+        if (requestCode == pickFolderRequestCode) {
+            val pending = pendingPickFolder
+            pendingPickFolder = null
+            if (resultCode != Activity.RESULT_OK) {
+                pending?.success(null)
+                return
+            }
+            val uri = data?.data
+            if (uri == null) {
+                pending?.success(null)
+                return
+            }
+            try {
+                contentResolver.takePersistableUriPermission(
+                    uri,
+                    Intent.FLAG_GRANT_READ_URI_PERMISSION,
+                )
+            } catch (_: Exception) {
+            }
+            pending?.success(treeFolderPath(uri))
             return
         }
         if (requestCode == pickImageRequestCode) {

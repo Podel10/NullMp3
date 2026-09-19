@@ -6,6 +6,7 @@ import 'package:provider/provider.dart';
 import '../data/artwork.dart';
 import '../data/playback_file.dart';
 import '../data/video_gif.dart';
+import '../data/web_audio.dart';
 import '../l10n/strings.dart';
 import '../models/models.dart';
 import '../state/library.dart';
@@ -307,7 +308,7 @@ class _AppDrawer extends StatelessWidget {
                 onAddFiles();
               },
             ),
-            if (videoGifSupported)
+            if (webAudioSupported || videoGifSupported)
               ListTile(
                 leading: const Icon(Icons.handyman_outlined),
                 title: Text(s.tools),

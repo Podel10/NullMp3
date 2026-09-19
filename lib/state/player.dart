@@ -105,6 +105,7 @@ class PlayerController extends ChangeNotifier with WidgetsBindingObserver {
   int? _listenAnchorMs;
   bool _userPaused = true;
   bool _mixWithOthers = false;
+  bool _askedAllFilesNative = false;
   bool _otherMediaOn = false;
   bool _userStarted = false;
   DateTime? _ignoreFocusUntil;
@@ -114,6 +115,21 @@ class PlayerController extends ChangeNotifier with WidgetsBindingObserver {
   StreamSubscription<void>? _noisySub;
   StreamSubscription<AudioInterruptionEvent>? _interruptSub;
   static const _session = MethodChannel('com.nullmp3.nullmp3/session');
+  static const _files = MethodChannel('com.nullmp3.nullmp3/files');
+  bool _useNative = false;
+  int _nativeDurationMs = 0;
+  Timer? _nativeTimer;
+  final _nativeClock = StreamController<Duration>.broadcast();
+
+  Stream<Duration> get positionClock =>
+      _useNative ? _nativeClock.stream : player.positionStream;
+
+  Duration get totalDuration {
+    if (_nativeDurationMs > 200) {
+      return Duration(milliseconds: _nativeDurationMs);
+    }
+    return player.duration ?? Duration(milliseconds: current?.durationMs ?? 0);
+  }
 
   Track? get current {
     if (queue.isEmpty || index < 0 || index >= queue.length) return null;
@@ -187,8 +203,10 @@ class PlayerController extends ChangeNotifier with WidgetsBindingObserver {
         'playing': playing,
         'title': track.title,
         'artist': track.artist,
-        'durationMs': track.durationMs,
-        'positionMs': player.position.inMilliseconds,
+        'durationMs': _nativeDurationMs > 200 ? _nativeDurationMs : track.durationMs,
+        'positionMs': _useNative
+            ? _lastPosition.inMilliseconds
+            : player.position.inMilliseconds,
       }),
     );
   }
@@ -205,7 +223,7 @@ class PlayerController extends ChangeNotifier with WidgetsBindingObserver {
             contentType: AndroidAudioContentType.music,
             usage: AndroidAudioUsage.media,
           ),
-          androidAudioFocusGainType: AndroidAudioFocusGainType.gainTransientMayDuck,
+          androidAudioFocusGainType: AndroidAudioFocusGainType.gain,
           androidWillPauseWhenDucked: false,
         ),
       ).timeout(const Duration(seconds: 2));
@@ -236,7 +254,11 @@ class PlayerController extends ChangeNotifier with WidgetsBindingObserver {
     _userPaused = true;
     _lastPosition = _heldPosition();
     try {
-      await player.pause();
+      if (_useNative) {
+        await _nativePause();
+      } else {
+        await player.pause();
+      }
     } catch (_) {}
     _pushSession();
   }
@@ -271,12 +293,129 @@ class PlayerController extends ChangeNotifier with WidgetsBindingObserver {
     // play() during setAudioSource throws "Loading interrupted" and the
     // startup restore loop then looks like a frozen app.
     if (_loading && !force) return;
-    // Do not request exclusive focus. Play stays up next to another music app.
-    unawaited(player.play());
+    if (_useNative) {
+      await _nativeResume();
+      _pushSession();
+      return;
+    }
+    unawaited(_startOutput());
     _pushSession();
   }
 
+  /// Activate the Android mixer, then play. just_audio must not own
+  /// setActive — if that fails it used to cancel play. We still play
+  /// even if focus is denied, otherwise Honor stays at 0:00.
+  Future<void> _startOutput() async {
+    try {
+      final session = await AudioSession.instance.timeout(
+        const Duration(milliseconds: 800),
+      );
+      await session.setActive(true).timeout(const Duration(milliseconds: 800));
+    } catch (_) {}
+    try {
+      await player.play();
+    } catch (_) {}
+    try {
+      await player.setVolume(settings.volume);
+    } catch (_) {}
+  }
+
+  Future<bool> _nativeStart(String path) async {
+    if (kIsWeb || defaultTargetPlatform != TargetPlatform.android) return false;
+    try {
+      await player.stop();
+    } catch (_) {}
+    try {
+      final result = await _files.invokeMethod<dynamic>('nativePlay', {
+        'path': path,
+      }).timeout(const Duration(seconds: 12));
+      if (result is! Map) return false;
+      final map = result.map((key, value) => MapEntry(key.toString(), value));
+      if (map['ok'] != true) return false;
+      _useNative = true;
+      _nativeDurationMs = (map['durationMs'] as num?)?.toInt() ?? 0;
+      _lastPosition = Duration.zero;
+      playing = true;
+      _userPaused = false;
+      _startNativeClock();
+      notifyListeners();
+      return true;
+    } catch (_) {
+      _useNative = false;
+      return false;
+    }
+  }
+
+  void _startNativeClock() {
+    _nativeTimer?.cancel();
+    _nativeTimer = Timer.periodic(const Duration(milliseconds: 250), (_) {
+      unawaited(_pollNative());
+    });
+  }
+
+  Future<void> _pollNative() async {
+    if (!_useNative) return;
+    try {
+      final result = await _files.invokeMethod<dynamic>('nativeState')
+          .timeout(const Duration(milliseconds: 400));
+      if (result is! Map) return;
+      final map = result.map((key, value) => MapEntry(key.toString(), value));
+      final pos = (map['positionMs'] as num?)?.toInt() ?? 0;
+      final dur = (map['durationMs'] as num?)?.toInt() ?? 0;
+      final isPlaying = map['playing'] == true;
+      if (dur > 200) _nativeDurationMs = dur;
+      _lastPosition = Duration(milliseconds: pos);
+      if (!_nativeClock.isClosed) _nativeClock.add(_lastPosition);
+      if (playing != isPlaying && !_userPaused) {
+        playing = isPlaying;
+        notifyListeners();
+      }
+      _pushSession();
+      if (_userPaused || _loading) return;
+      if (dur > 1000 && pos >= dur - 400) {
+        unawaited(_onCompleted());
+      }
+    } catch (_) {}
+  }
+
+  Future<void> _nativePause() async {
+    _nativeTimer?.cancel();
+    try {
+      await _files.invokeMethod<void>('nativePause').timeout(
+        const Duration(milliseconds: 800),
+      );
+    } catch (_) {}
+    playing = false;
+    notifyListeners();
+    _pushSession();
+  }
+
+  Future<void> _nativeResume() async {
+    try {
+      await _files.invokeMethod<void>('nativeResume').timeout(
+        const Duration(milliseconds: 800),
+      );
+    } catch (_) {}
+    playing = true;
+    _startNativeClock();
+    notifyListeners();
+    _pushSession();
+  }
+
+  Future<void> _nativeStop() async {
+    _nativeTimer?.cancel();
+    _nativeTimer = null;
+    _useNative = false;
+    _nativeDurationMs = 0;
+    try {
+      await _files.invokeMethod<void>('nativeStop').timeout(
+        const Duration(milliseconds: 800),
+      );
+    } catch (_) {}
+  }
+
   Duration _heldPosition() {
+    if (_useNative && _lastPosition.inMilliseconds >= 0) return _lastPosition;
     final live = player.position;
     if (live.inMilliseconds >= 400) return live;
     return _lastPosition;
@@ -359,6 +498,11 @@ class PlayerController extends ChangeNotifier with WidgetsBindingObserver {
       _userPaused = true;
       _lastPosition = _heldPosition();
       _ignoreFocusUntil = DateTime.now().add(const Duration(seconds: 2));
+      if (_useNative) {
+        await _nativePause();
+        unawaited(_persistSession());
+        return;
+      }
       if (settings.pauseFade) {
         await _fadeVolume(0, const Duration(milliseconds: 300));
         await player.pause();
@@ -367,6 +511,10 @@ class PlayerController extends ChangeNotifier with WidgetsBindingObserver {
         await player.pause();
       }
       unawaited(_persistSession());
+      return;
+    }
+    if (_useNative && _loadedPath == current!.path) {
+      await resumePlayback();
       return;
     }
     if (_loadedPath != current!.path) {
@@ -413,6 +561,18 @@ class PlayerController extends ChangeNotifier with WidgetsBindingObserver {
 
   Future<void> seek(Duration position) async {
     _flushListenClock();
+    _lastPosition = position;
+    if (_useNative) {
+      try {
+        await _files.invokeMethod<void>('nativeSeek', {
+          'positionMs': position.inMilliseconds,
+        }).timeout(const Duration(milliseconds: 800));
+      } catch (_) {}
+      if (!_nativeClock.isClosed) _nativeClock.add(position);
+      if (playing) _beginListenClock();
+      _pushSession();
+      return;
+    }
     await player.seek(position);
     if (playing) _beginListenClock();
   }
@@ -694,6 +854,7 @@ class PlayerController extends ChangeNotifier with WidgetsBindingObserver {
     final gen = ++_loadGen;
     _loading = true;
     _lastPosition = position;
+    await _nativeStop();
     try {
       String playPath = track.path;
       try {
@@ -725,10 +886,21 @@ class PlayerController extends ChangeNotifier with WidgetsBindingObserver {
         );
       }
 
-      Future<bool> trySource(String path) async {
+      Future<bool> trySource(String path, {required bool last}) async {
         try {
           await setSource(path).timeout(const Duration(seconds: 8));
-          return true;
+          var ms = player.duration?.inMilliseconds ?? 0;
+          if (ms <= 200) {
+            try {
+              final ready = await player.durationStream
+                  .where((value) => value != null && value.inMilliseconds > 200)
+                  .first
+                  .timeout(const Duration(seconds: 4));
+              ms = ready?.inMilliseconds ?? 0;
+            } catch (_) {}
+          }
+          if (ms > 200) return true;
+          return false;
         } catch (error) {
           debugPrint('setAudioSource failed for $path: $error');
           return false;
@@ -741,23 +913,34 @@ class PlayerController extends ChangeNotifier with WidgetsBindingObserver {
         if (!sources.contains(value)) sources.add(value);
       }
 
+      if (!kIsWeb && defaultTargetPlatform == TargetPlatform.android && !_askedAllFilesNative) {
+        _askedAllFilesNative = true;
+        try {
+          await const MethodChannel('com.nullmp3.nullmp3/files')
+              .invokeMethod<bool>('requestAllFiles')
+              .timeout(const Duration(seconds: 2));
+        } catch (_) {}
+      }
+      final opened = await openPlaybackFile(track.path);
+      addSource(opened);
+      addSource(track.uri);
+      addSource(await playbackContentUri(track.path));
       addSource(playPath);
       addSource(track.path);
-      addSource(track.uri);
-      if (sources.every((source) => !source.startsWith('content:'))) {
-        addSource(await playbackContentUri(track.path));
-      }
 
       var loaded = false;
-      for (final source in sources) {
+      for (var i = 0; i < sources.length; i++) {
         if (gen != _loadGen) return;
-        loaded = await trySource(source);
+        loaded = await trySource(sources[i], last: i == sources.length - 1);
         if (loaded) break;
       }
       if (!loaded && sources.isNotEmpty) {
         await Future<void>.delayed(const Duration(milliseconds: 250));
         if (gen != _loadGen) return;
-        loaded = await trySource(sources.first);
+        loaded = await trySource(sources.first, last: true);
+      }
+      if (!loaded) {
+        loaded = await _nativeStart(track.path);
       }
       if (!loaded) {
         throw StateError('setAudioSource failed');
@@ -765,6 +948,23 @@ class PlayerController extends ChangeNotifier with WidgetsBindingObserver {
       if (gen != _loadGen) return;
       _loadedPath = track.path;
       _errorSkips = 0;
+      if (_useNative) {
+        if (position > const Duration(milliseconds: 400)) {
+          try {
+            await _files.invokeMethod<void>('nativeSeek', {
+              'positionMs': position.inMilliseconds,
+            }).timeout(const Duration(milliseconds: 800));
+          } catch (_) {}
+        }
+        if (play) {
+          playing = true;
+          notifyListeners();
+          _pushSession();
+        } else {
+          await _nativePause();
+        }
+        return;
+      }
       try {
         await player.setLoopMode(LoopMode.off).timeout(const Duration(milliseconds: 250));
       } catch (_) {}
@@ -988,6 +1188,9 @@ class PlayerController extends ChangeNotifier with WidgetsBindingObserver {
     _sleepTimer?.cancel();
     unawaited(_noisySub?.cancel());
     unawaited(_interruptSub?.cancel());
+    _nativeTimer?.cancel();
+    unawaited(_nativeStop());
+    unawaited(_nativeClock.close());
     player.dispose();
     if (!kIsWeb && defaultTargetPlatform == TargetPlatform.android) {
       unawaited(const MethodChannel('com.nullmp3.nullmp3/halo').invokeMethod<void>('stop'));

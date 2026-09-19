@@ -298,10 +298,10 @@ class _NowSeekBar extends StatelessWidget {
   Widget build(BuildContext context) {
     final player = contextPlayer(context);
     return StreamBuilder<Duration>(
-      stream: player.player.positionStream,
+      stream: player.positionClock,
       builder: (context, snapshot) {
         final position = snapshot.data ?? Duration.zero;
-        final duration = player.player.duration ?? Duration.zero;
+        final duration = player.totalDuration;
         final max = duration.inMilliseconds <= 0 ? 1.0 : duration.inMilliseconds.toDouble();
         return Padding(
           padding: const EdgeInsets.fromLTRB(16, 2, 16, 0),

@@ -1,5 +1,5 @@
 name: nullmp3
-description: "A Muzio-inspired local MP3 player for Android and Windows."
+description: "A local MP3 player for Android and Windows."
 # The following line prevents the package from being accidentally published to
 # pub.dev using `flutter pub publish`. This is preferred for private packages.
 publish_to: 'none' # Remove this line if you wish to publish to pub.dev
@@ -74,6 +74,8 @@ flutter:
   # included with your application, so that you can use the icons in
   # the material Icons class.
   uses-material-design: true
+  assets:
+    - assets/l10n/
 
   # To add assets to your application, add an assets section, like this:
   # assets:

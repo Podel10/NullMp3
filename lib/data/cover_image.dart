@@ -34,6 +34,23 @@ Future<String?> playbackContentUri(String path) async {
   return null;
 }
 
+/// Returns a file path ExoPlayer can actually open. Copies through MediaStore
+/// when the original path exists but is unreadable.
+Future<String?> openPlaybackFile(String path) async {
+  if (path.isEmpty) return null;
+  if (path.startsWith('content:')) return path;
+  if (kIsWeb || !Platform.isAndroid) {
+    return File(path).existsSync() ? path : null;
+  }
+  try {
+    final opened = await _filesChannel.invokeMethod<String>('openPlayback', {
+      'path': path,
+    }).timeout(const Duration(seconds: 20));
+    if (opened != null && opened.isNotEmpty) return opened;
+  } catch (_) {}
+  return null;
+}
+
 Future<Uint8List?> grabVideoPoster(String path, {int maxSide = 360}) async {
   if (kIsWeb || !Platform.isAndroid) return null;
   try {

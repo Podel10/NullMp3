@@ -18,6 +18,11 @@ const audioExtensions = {
   '.aiff',
   '.aif',
   '.alac',
+  '.mp4',
+  '.m4v',
+  '.webm',
+  '.mkv',
+  '.3gp',
 };
 
 const _skipScanDirs = {

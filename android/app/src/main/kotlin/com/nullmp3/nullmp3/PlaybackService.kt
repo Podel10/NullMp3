@@ -15,6 +15,7 @@ import android.os.Handler
 import android.os.IBinder
 import android.os.Looper
 import android.os.PowerManager
+import android.os.Process
 import android.support.v4.media.MediaMetadataCompat
 import android.support.v4.media.session.MediaSessionCompat
 import android.support.v4.media.session.PlaybackStateCompat
@@ -359,16 +360,33 @@ class PlaybackService : Service() {
     }
 
     private fun otherMediaPlaying(configs: List<AudioPlaybackConfiguration>): Boolean {
-        var mediaCount = 0
+        var others = 0
+        var sawUid = false
+        val self = Process.myUid()
         for (config in configs) {
             val usage = config.audioAttributes.usage
             if (usage != AudioAttributes.USAGE_MEDIA && usage != AudioAttributes.USAGE_GAME) {
                 continue
             }
-            mediaCount++
+            val uid = clientUidOf(config)
+            if (uid >= 0) {
+                sawUid = true
+                if (uid == self) continue
+            }
+            others++
         }
-        // Paused: our track is idle, so one media player is the other app.
-        // Playing: two media players means we are sitting next to it.
-        return if (playing) mediaCount >= 2 else mediaCount >= 1
+        // Our video cover also uses USAGE_MEDIA. Ignore this app so a looping
+        // cover is not treated as YouTube and does not pause the song.
+        if (sawUid) return others >= 1
+        return if (playing) others >= 2 else others >= 1
+    }
+
+    private fun clientUidOf(config: AudioPlaybackConfiguration): Int {
+        return try {
+            val value = config.javaClass.getMethod("getClientUid").invoke(config)
+            value as? Int ?: -1
+        } catch (_: Exception) {
+            -1
+        }
     }
 }
