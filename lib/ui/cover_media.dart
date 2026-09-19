@@ -45,11 +45,14 @@ class CoverBytesView extends StatelessWidget {
     if (isVideoBytes(bytes)) {
       final playVideo = live ?? animate;
       if (!playVideo || kIsWeb) {
-        return errorBuilder?.call(context, 'video', StackTrace.empty) ??
-            const ColoredBox(
-              color: Color(0xFF3A4A56),
-              child: Icon(Icons.movie_outlined, color: Colors.white54),
-            );
+        return _VideoPosterCover(
+          bytes: bytes,
+          fit: fit,
+          cacheWidth: cacheWidth,
+          filterQuality: filterQuality,
+          artworkPath: artworkPath,
+          errorBuilder: errorBuilder,
+        );
       }
       return _VideoCover(
         bytes: bytes,
@@ -58,6 +61,8 @@ class CoverBytesView extends StatelessWidget {
         animate: animate,
         liveRim: liveRim,
         artworkPath: artworkPath,
+        cacheWidth: cacheWidth,
+        filterQuality: filterQuality,
         errorBuilder: errorBuilder,
       );
     }
@@ -362,6 +367,103 @@ class _AnimatedRasterCoverState extends State<_AnimatedRasterCover> {
   }
 }
 
+class _VideoPosterCover extends StatefulWidget {
+  const _VideoPosterCover({
+    required this.bytes,
+    required this.fit,
+    this.cacheWidth,
+    this.filterQuality = FilterQuality.low,
+    this.artworkPath,
+    this.errorBuilder,
+  });
+
+  final Uint8List bytes;
+  final BoxFit fit;
+  final int? cacheWidth;
+  final FilterQuality filterQuality;
+  final String? artworkPath;
+  final ImageErrorWidgetBuilder? errorBuilder;
+
+  @override
+  State<_VideoPosterCover> createState() => _VideoPosterCoverState();
+}
+
+class _VideoPosterCoverState extends State<_VideoPosterCover> {
+  Uint8List? _poster;
+  Object? _token;
+  var _failed = false;
+
+  @override
+  void initState() {
+    super.initState();
+    unawaited(_load());
+  }
+
+  @override
+  void didUpdateWidget(covariant _VideoPosterCover oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (!identical(oldWidget.bytes, widget.bytes) || oldWidget.artworkPath != widget.artworkPath) {
+      unawaited(_load());
+    }
+  }
+
+  @override
+  void dispose() {
+    _token = null;
+    super.dispose();
+  }
+
+  Future<void> _load() async {
+    final token = Object();
+    _token = token;
+    _failed = false;
+    try {
+      final poster = await ArtworkStore.instance.posterFor(widget.bytes, widget.artworkPath);
+      if (!mounted || !identical(_token, token)) return;
+      setState(() {
+        _poster = poster;
+        _failed = poster == null;
+      });
+    } catch (_) {
+      if (mounted && identical(_token, token)) {
+        setState(() {
+          _poster = null;
+          _failed = true;
+        });
+      }
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final poster = _poster;
+    if (poster != null) {
+      return Image.memory(
+        poster,
+        fit: widget.fit,
+        width: double.infinity,
+        height: double.infinity,
+        gaplessPlayback: true,
+        filterQuality: widget.filterQuality,
+        cacheWidth: widget.cacheWidth,
+        errorBuilder: widget.errorBuilder ??
+            (_, _, _) => const ColoredBox(
+              color: Color(0xFF3A4A56),
+              child: Icon(Icons.movie_outlined, color: Colors.white54),
+            ),
+      );
+    }
+    if (_failed) {
+      return widget.errorBuilder?.call(context, 'video', StackTrace.empty) ??
+          const ColoredBox(
+            color: Color(0xFF3A4A56),
+            child: Icon(Icons.movie_outlined, color: Colors.white54),
+          );
+    }
+    return const ColoredBox(color: Color(0xFF3A4A56));
+  }
+}
+
 class _VideoCover extends StatefulWidget {
   const _VideoCover({
     required this.bytes,
@@ -370,6 +472,8 @@ class _VideoCover extends StatefulWidget {
     required this.animate,
     this.liveRim = false,
     this.artworkPath,
+    this.cacheWidth,
+    this.filterQuality = FilterQuality.low,
     this.errorBuilder,
   });
 
@@ -379,6 +483,8 @@ class _VideoCover extends StatefulWidget {
   final bool animate;
   final bool liveRim;
   final String? artworkPath;
+  final int? cacheWidth;
+  final FilterQuality filterQuality;
   final ImageErrorWidgetBuilder? errorBuilder;
 
   @override
@@ -390,6 +496,7 @@ class _VideoCoverState extends State<_VideoCover> {
   VideoPlayerController? _player;
   Object? _token;
   Timer? _rimTimer;
+  Uint8List? _poster;
   var _failed = false;
   var _rimBusy = false;
   var _primed = false;
@@ -441,6 +548,8 @@ class _VideoCoverState extends State<_VideoCover> {
     }
     _failed = false;
     _primed = false;
+    _poster = null;
+    unawaited(_loadPoster(token));
     try {
       final file = await _videoFile(widget.bytes, widget.artworkPath);
       if (!mounted || !identical(_token, token)) return;
@@ -466,6 +575,14 @@ class _VideoCoverState extends State<_VideoCover> {
     } catch (_) {
       if (mounted && identical(_token, token)) setState(() => _failed = true);
     }
+  }
+
+  Future<void> _loadPoster(Object token) async {
+    try {
+      final poster = await ArtworkStore.instance.posterFor(widget.bytes, widget.artworkPath);
+      if (!mounted || !identical(_token, token) || poster == null) return;
+      setState(() => _poster = poster);
+    } catch (_) {}
   }
 
   Future<void> _syncPlayback() async {
@@ -528,6 +645,18 @@ class _VideoCoverState extends State<_VideoCover> {
     }
     final player = _player;
     if (player == null || !player.value.isInitialized) {
+      final poster = _poster;
+      if (poster != null) {
+        return Image.memory(
+          poster,
+          fit: widget.fit,
+          width: double.infinity,
+          height: double.infinity,
+          gaplessPlayback: true,
+          filterQuality: widget.filterQuality,
+          cacheWidth: widget.cacheWidth,
+        );
+      }
       return const ColoredBox(color: Color(0xFF3A4A56));
     }
     final size = player.value.size;

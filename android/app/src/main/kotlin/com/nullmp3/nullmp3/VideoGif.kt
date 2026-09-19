@@ -18,6 +18,7 @@ import android.os.SystemClock
 import android.provider.MediaStore
 import android.util.Log
 import io.flutter.plugin.common.EventChannel
+import java.io.ByteArrayOutputStream
 import java.io.File
 import kotlin.math.max
 import kotlin.math.roundToInt
@@ -74,6 +75,30 @@ object VideoGif {
                 "height" to height,
                 "rotation" to rotation,
             )
+        } finally {
+            release(retriever)
+        }
+    }
+
+    fun poster(context: Context, path: String, maxSide: Int = 360): ByteArray? {
+        val retriever = open(context, path)
+        try {
+            val bitmap = try {
+                retriever.getFrameAtTime(0L, MediaMetadataRetriever.OPTION_CLOSEST_SYNC)
+                    ?: retriever.getFrameAtTime(0L, MediaMetadataRetriever.OPTION_CLOSEST)
+                    ?: retriever.frameAtTime
+            } catch (_: Exception) {
+                null
+            } ?: return null
+            val scaled = scaleToMax(bitmap, maxSide.coerceIn(64, 720))
+            val out = ByteArrayOutputStream()
+            return try {
+                scaled.compress(Bitmap.CompressFormat.JPEG, 82, out)
+                out.toByteArray()
+            } finally {
+                if (scaled !== bitmap) scaled.recycle()
+                bitmap.recycle()
+            }
         } finally {
             release(retriever)
         }
@@ -601,6 +626,18 @@ object VideoGif {
     }
 
     private fun even(value: Int): Int = (value / 2 * 2).coerceAtLeast(2)
+
+    private fun scaleToMax(src: Bitmap, maxSide: Int): Bitmap {
+        val width = src.width
+        val height = src.height
+        if (width <= 0 || height <= 0) return src
+        val longest = max(width, height)
+        if (longest <= maxSide) return src
+        val scale = maxSide.toFloat() / longest
+        val dstW = (width * scale).roundToInt().coerceAtLeast(1)
+        val dstH = (height * scale).roundToInt().coerceAtLeast(1)
+        return Bitmap.createScaledBitmap(src, dstW, dstH, true)
+    }
 
     private fun scaleExact(src: Bitmap, dstW: Int, dstH: Int): Bitmap {
         if (src.width == dstW && src.height == dstH) return src

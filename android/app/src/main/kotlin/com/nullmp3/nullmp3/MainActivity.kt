@@ -6,7 +6,6 @@ import android.content.ContentUris
 import android.content.ContentValues
 import android.content.Context
 import android.content.Intent
-import android.media.AudioManager
 import android.net.Uri
 import android.os.Build
 import android.os.Bundle
@@ -216,6 +215,30 @@ class MainActivity : FlutterActivity() {
                             }
                         }
                     }
+                    "videoPoster" -> {
+                        val path = call.argument<String>("path")
+                        val maxSide = call.argument<Int>("maxSide") ?: 360
+                        if (path.isNullOrEmpty()) {
+                            result.error("bad_path", "Missing path", null)
+                        } else {
+                            editorExecutor.execute {
+                                try {
+                                    val poster = VideoGif.poster(this, path, maxSide)
+                                    mainHandler.post { result.success(poster) }
+                                } catch (error: Exception) {
+                                    mainHandler.post { result.error("video", error.message, null) }
+                                }
+                            }
+                        }
+                    }
+                    "playbackUri" -> {
+                        val path = call.argument<String>("path")
+                        if (path.isNullOrEmpty()) {
+                            result.error("bad_path", "Missing path", null)
+                        } else {
+                            result.success(findMediaUri(path)?.toString())
+                        }
+                    }
                     "makeGif" -> {
                         val path = call.argument<String>("path")
                         val startMs = (call.argument<Number>("startMs")?.toLong()) ?: 0L
@@ -280,14 +303,6 @@ class MainActivity : FlutterActivity() {
                     } catch (_: Exception) {
                     }
                     result.success(null)
-                }
-                "inVoiceCall" -> {
-                    val mode = (getSystemService(Context.AUDIO_SERVICE) as? AudioManager)?.mode
-                    result.success(
-                        mode == AudioManager.MODE_IN_CALL ||
-                            mode == AudioManager.MODE_IN_COMMUNICATION ||
-                            mode == AudioManager.MODE_RINGTONE,
-                    )
                 }
                 else -> result.notImplemented()
             }
@@ -398,6 +413,7 @@ class MainActivity : FlutterActivity() {
 
     private fun queryMusic(folders: List<String>, items: LinkedHashMap<String, HashMap<String, Any?>>) {
         val projection = mutableListOf(
+            MediaStore.Audio.Media._ID,
             MediaStore.Audio.Media.TITLE,
             MediaStore.Audio.Media.ARTIST,
             MediaStore.Audio.Media.ALBUM,
@@ -420,6 +436,7 @@ class MainActivity : FlutterActivity() {
                 null,
                 "${MediaStore.Audio.Media.TITLE} COLLATE NOCASE ASC",
             )?.use { cursor ->
+                val idI = cursor.getColumnIndex(MediaStore.Audio.Media._ID)
                 val titleI = cursor.getColumnIndex(MediaStore.Audio.Media.TITLE)
                 val artistI = cursor.getColumnIndex(MediaStore.Audio.Media.ARTIST)
                 val albumI = cursor.getColumnIndex(MediaStore.Audio.Media.ALBUM)
@@ -436,6 +453,12 @@ class MainActivity : FlutterActivity() {
                     val path = resolvePath(if (pathI >= 0) cursor.getString(pathI) else null, relative, display)
                         ?: continue
                     if (folders.isNotEmpty() && !pathIsUnderFolders(path, relative, folders)) continue
+                    val id = if (idI >= 0 && !cursor.isNull(idI)) cursor.getLong(idI) else -1L
+                    val uri = if (id >= 0) {
+                        ContentUris.withAppendedId(MediaStore.Audio.Media.EXTERNAL_CONTENT_URI, id).toString()
+                    } else {
+                        null
+                    }
                     addItem(
                         items,
                         path,
@@ -446,6 +469,7 @@ class MainActivity : FlutterActivity() {
                         if (modifiedI >= 0) cursor.getLong(modifiedI) else 0L,
                         if (trackI >= 0 && !cursor.isNull(trackI)) cursor.getString(trackI)?.substringBefore('/')?.toIntOrNull() else null,
                         if (yearI >= 0) cursor.getInt(yearI) else 0,
+                        uri,
                     )
                 }
             }
@@ -481,6 +505,7 @@ class MainActivity : FlutterActivity() {
         modified: Long,
         trackNumber: Int?,
         year: Int,
+        uri: String? = null,
     ) {
         val key = canonicalPath(path)
         if (items.containsKey(key)) return
@@ -493,6 +518,7 @@ class MainActivity : FlutterActivity() {
             "modifiedMs" to modified * 1000,
             "trackNumber" to trackNumber,
             "year" to if (year > 0) year else null,
+            "uri" to uri,
         )
     }
 

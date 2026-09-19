@@ -70,6 +70,7 @@ class PlayerController extends ChangeNotifier with WidgetsBindingObserver {
   final AndroidEqualizer _equalizer = AndroidEqualizer();
   late final AudioPlayer player = AudioPlayer(
     handleInterruptions: false,
+    handleAudioSessionActivation: false,
     maxSkipsOnError: 8,
     androidAudioOffloadPreferences: const AndroidAudioOffloadPreferences(
       audioOffloadMode: AndroidAudioOffloadMode.disabled,
@@ -102,8 +103,9 @@ class PlayerController extends ChangeNotifier with WidgetsBindingObserver {
   final List<int> _history = [];
   int _errorSkips = 0;
   int? _listenAnchorMs;
-  bool _resumeAfterInterruption = false;
   bool _userPaused = true;
+  bool _mixWithOthers = false;
+  bool _otherMediaOn = false;
   bool _userStarted = false;
   DateTime? _ignoreFocusUntil;
   Duration _lastPosition = Duration.zero;
@@ -140,7 +142,22 @@ class PlayerController extends ChangeNotifier with WidgetsBindingObserver {
         case 'play':
           if (hasTrack) await resumePlayback();
         case 'pause':
-          if (playing) await playPause();
+          await pauseFromSystem();
+        case 'taskRemoved':
+          await pauseFromSystem();
+        case 'otherMediaOn':
+          final already = _otherMediaOn;
+          _otherMediaOn = true;
+          final justResumed =
+              _ignoreFocusUntil != null && DateTime.now().isBefore(_ignoreFocusUntil!);
+          if (justResumed) {
+            _mixWithOthers = true;
+          } else if (!already && playing && !_mixWithOthers) {
+            await pauseFromSystem();
+          }
+        case 'otherMediaOff':
+          _otherMediaOn = false;
+          if (playing) _mixWithOthers = false;
         case 'next':
           await next();
         case 'previous':
@@ -188,15 +205,12 @@ class PlayerController extends ChangeNotifier with WidgetsBindingObserver {
             contentType: AndroidAudioContentType.music,
             usage: AndroidAudioUsage.media,
           ),
-          androidAudioFocusGainType: AndroidAudioFocusGainType.gain,
+          androidAudioFocusGainType: AndroidAudioFocusGainType.gainTransientMayDuck,
           androidWillPauseWhenDucked: false,
         ),
       ).timeout(const Duration(seconds: 2));
       _noisySub = session.becomingNoisyEventStream.listen((_) {
-        _resumeAfterInterruption = false;
-        _userPaused = true;
-        _lastPosition = _heldPosition();
-        if (playing) unawaited(player.pause());
+        unawaited(pauseFromSystem());
       });
       _interruptSub = session.interruptionEventStream.listen((event) {
         unawaited(_onAudioInterruption(event));
@@ -205,32 +219,26 @@ class PlayerController extends ChangeNotifier with WidgetsBindingObserver {
   }
 
   Future<void> _onAudioInterruption(AudioInterruptionEvent event) async {
-    if (_userPaused) return;
+    if (_mixWithOthers || _userPaused || !playing) return;
     if (_ignoreFocusUntil != null && DateTime.now().isBefore(_ignoreFocusUntil!)) return;
-    if (event.begin) {
-      if (event.type != AudioInterruptionType.pause || !playing) return;
-      // Home/Samsung often fire a pause interruption with no matching GAIN.
-      // Yield only for an actual call so background playback stays up.
-      await Future<void>.delayed(const Duration(milliseconds: 80));
-      if (_userPaused || !playing) return;
-      if (!await _inVoiceCall()) return;
-      _resumeAfterInterruption = true;
-      unawaited(player.pause());
-      return;
-    }
-    if (event.type == AudioInterruptionType.pause && _resumeAfterInterruption) {
-      _resumeAfterInterruption = false;
-      unawaited(resumePlayback());
-    }
+    if (!event.begin) return;
+    if (event.type == AudioInterruptionType.duck) return;
+    await pauseFromSystem();
   }
 
-  Future<bool> _inVoiceCall() async {
-    if (defaultTargetPlatform != TargetPlatform.android) return false;
-    try {
-      return await _session.invokeMethod<bool>('inVoiceCall') ?? false;
-    } catch (_) {
-      return false;
+  Future<void> pauseFromSystem() async {
+    _mixWithOthers = false;
+    if (!playing && !player.playing) {
+      _userPaused = true;
+      _pushSession();
+      return;
     }
+    _userPaused = true;
+    _lastPosition = _heldPosition();
+    try {
+      await player.pause();
+    } catch (_) {}
+    _pushSession();
   }
 
   @override
@@ -250,21 +258,22 @@ class PlayerController extends ChangeNotifier with WidgetsBindingObserver {
 
   Future<void> _keepAudioAlive() async {
     if (defaultTargetPlatform != TargetPlatform.android) return;
-    try {
-      final session = await AudioSession.instance.timeout(const Duration(seconds: 2));
-      await session.setActive(true).timeout(const Duration(seconds: 2));
-    } catch (_) {}
     _pushSession();
   }
 
   Future<void> resumePlayback({Duration? limit, bool force = false}) async {
     _userPaused = false;
     _userStarted = true;
+    // Mix only when another app is already using media. A normal Play must
+    // stay exclusive so a later YouTube/etc. start still auto-pauses us.
+    _mixWithOthers = _otherMediaOn;
     _ignoreFocusUntil = DateTime.now().add(const Duration(seconds: 2));
     // play() during setAudioSource throws "Loading interrupted" and the
     // startup restore loop then looks like a frozen app.
     if (_loading && !force) return;
+    // Do not request exclusive focus. Play stays up next to another music app.
     unawaited(player.play());
+    _pushSession();
   }
 
   Duration _heldPosition() {
@@ -343,12 +352,11 @@ class PlayerController extends ChangeNotifier with WidgetsBindingObserver {
   }
 
   Future<void> playPause() async {
-    _resumeAfterInterruption = false;
     _userStarted = true;
     if (!hasTrack) return;
     if (playing || player.playing) {
+      _mixWithOthers = false;
       _userPaused = true;
-      _resumeAfterInterruption = false;
       _lastPosition = _heldPosition();
       _ignoreFocusUntil = DateTime.now().add(const Duration(seconds: 2));
       if (settings.pauseFade) {
@@ -717,13 +725,42 @@ class PlayerController extends ChangeNotifier with WidgetsBindingObserver {
         );
       }
 
-      try {
-        await setSource(playPath).timeout(const Duration(seconds: 8));
-      } catch (error) {
-        debugPrint('setAudioSource failed for $playPath: $error');
+      Future<bool> trySource(String path) async {
+        try {
+          await setSource(path).timeout(const Duration(seconds: 8));
+          return true;
+        } catch (error) {
+          debugPrint('setAudioSource failed for $path: $error');
+          return false;
+        }
+      }
+
+      final sources = <String>[];
+      void addSource(String? value) {
+        if (value == null || value.isEmpty) return;
+        if (!sources.contains(value)) sources.add(value);
+      }
+
+      addSource(playPath);
+      addSource(track.path);
+      addSource(track.uri);
+      if (sources.every((source) => !source.startsWith('content:'))) {
+        addSource(await playbackContentUri(track.path));
+      }
+
+      var loaded = false;
+      for (final source in sources) {
+        if (gen != _loadGen) return;
+        loaded = await trySource(source);
+        if (loaded) break;
+      }
+      if (!loaded && sources.isNotEmpty) {
         await Future<void>.delayed(const Duration(milliseconds: 250));
         if (gen != _loadGen) return;
-        await setSource(playPath).timeout(const Duration(seconds: 8));
+        loaded = await trySource(sources.first);
+      }
+      if (!loaded) {
+        throw StateError('setAudioSource failed');
       }
       if (gen != _loadGen) return;
       _loadedPath = track.path;

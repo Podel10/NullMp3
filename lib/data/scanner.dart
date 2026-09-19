@@ -220,6 +220,7 @@ Track? trackFromMediaMap(Map<dynamic, dynamic> map) {
   final fileName = p.basenameWithoutExtension(path);
   final unknownArtist = artist == null || artist.isEmpty || artist.toLowerCase() == '<unknown>';
   final unknownAlbum = album == null || album.isEmpty || album.toLowerCase() == '<unknown>';
+  final uri = (map['uri'] as String?)?.trim();
   return Track(
     path: path,
     title: _visibleTitle(title, fileName),
@@ -230,6 +231,7 @@ Track? trackFromMediaMap(Map<dynamic, dynamic> map) {
     modifiedMs: (map['modifiedMs'] as num?)?.toInt() ?? 0,
     year: (map['year'] as num?)?.toInt(),
     trackNumber: (map['trackNumber'] as num?)?.toInt(),
+    uri: uri == null || uri.isEmpty ? null : uri,
   );
 }
 

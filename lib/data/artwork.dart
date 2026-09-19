@@ -43,8 +43,10 @@ class ArtworkStore extends ChangeNotifier {
 
   Directory? _cacheDir;
   final _memory = <String, Uint8List?>{};
+  final _posters = <String, Uint8List?>{};
   final _generation = <String, int>{};
   final _inflight = <String, Future<Uint8List?>>{};
+  final _posterInflight = <String, Future<Uint8List?>>{};
   int _running = 0;
   final _waiters = <Completer<void>>[];
 
@@ -59,6 +61,15 @@ class ArtworkStore extends ChangeNotifier {
   String _key(String trackPath) => trackPath.hashCode.toRadixString(16);
 
   File _file(String key, String ext) => File(p.join(_cacheDir?.path ?? '', '$key.$ext'));
+
+  File _posterFile(String key) => File(p.join(_cacheDir?.path ?? '', '$key.poster.jpg'));
+
+  Future<void> _deletePoster(String key) async {
+    try {
+      final file = _posterFile(key);
+      if (await file.exists()) await file.delete();
+    } catch (_) {}
+  }
 
   Future<File?> _existingFile(String key) async {
     final dir = _cacheDir;
@@ -113,6 +124,80 @@ class ArtworkStore extends ChangeNotifier {
     return null;
   }
 
+  Future<Uint8List?> poster(String trackPath) {
+    if (trackPath.isEmpty) return Future<Uint8List?>.value(null);
+    if (_posters.containsKey(trackPath)) {
+      return Future<Uint8List?>.value(_posters[trackPath]);
+    }
+    return _posterInflight.putIfAbsent(trackPath, () async {
+      try {
+        return await _loadPoster(trackPath);
+      } finally {
+        _posterInflight.remove(trackPath);
+      }
+    });
+  }
+
+  Future<Uint8List?> posterFor(Uint8List bytes, String? trackPath) async {
+    if (trackPath != null && trackPath.isNotEmpty) {
+      final cached = await poster(trackPath);
+      if (cached != null) return cached;
+    }
+    if (bytes.length <= _videoHeader) return null;
+    try {
+      final dir = await getTemporaryDirectory();
+      final ext = artworkExtension(bytes);
+      final stamp = '${bytes.length}_${bytes[0]}_${bytes[bytes.length >> 1]}_${bytes[bytes.length - 1]}';
+      final file = File(p.join(dir.path, 'cover_$stamp.$ext'));
+      if (!await file.exists() || await file.length() != bytes.length) {
+        await file.writeAsBytes(bytes, flush: false);
+      }
+      final shot = await grabVideoPoster(file.path);
+      if (shot == null || shot.length < 32) return null;
+      if (trackPath != null && trackPath.isNotEmpty) {
+        _posters[trackPath] = shot;
+        try {
+          await _posterFile(_key(trackPath)).writeAsBytes(shot, flush: false);
+        } catch (_) {}
+      }
+      return shot;
+    } catch (_) {
+      return null;
+    }
+  }
+
+  Future<Uint8List?> _loadPoster(String trackPath) async {
+    final key = _key(trackPath);
+    final file = _posterFile(key);
+    try {
+      if (await file.exists()) {
+        final bytes = await file.readAsBytes();
+        if (bytes.length > 32) {
+          _posters[trackPath] = bytes;
+          return bytes;
+        }
+      }
+    } catch (_) {}
+    File? media;
+    try {
+      media = await mediaFile(trackPath);
+    } catch (_) {}
+    if (media == null) {
+      _posters[trackPath] = null;
+      return null;
+    }
+    final shot = await grabVideoPoster(media.path);
+    if (shot == null || shot.length < 32) {
+      _posters[trackPath] = null;
+      return null;
+    }
+    try {
+      await file.writeAsBytes(shot, flush: false);
+    } catch (_) {}
+    _posters[trackPath] = shot;
+    return shot;
+  }
+
   Future<Uint8List?> _load(String trackPath) async {
     final gen = generationOf(trackPath);
     final key = _key(trackPath);
@@ -121,12 +206,14 @@ class ArtworkStore extends ChangeNotifier {
       try {
         if (_isVideoPath(cached.path)) {
           final header = await _readPrefix(cached, _videoHeader);
+          unawaited(poster(trackPath));
           return _finishLoad(trackPath, gen, header);
         }
         final bytes = await cached.readAsBytes();
         final value = bytes.isEmpty ? null : bytes;
         if (value != null && isVideoBytes(value)) {
           unawaited(_storeVideoFile(key, value));
+          unawaited(poster(trackPath));
           return _finishLoad(trackPath, gen, _headerOf(value));
         }
         return _finishLoad(trackPath, gen, value);
@@ -144,6 +231,7 @@ class ArtworkStore extends ChangeNotifier {
     if (generationOf(trackPath) != gen) return _memory[trackPath];
     if (bytes != null && isVideoBytes(bytes)) {
       await _storeVideoFile(key, bytes);
+      unawaited(poster(trackPath));
       return _finishLoad(trackPath, gen, _headerOf(bytes));
     }
     final kept = _finishLoad(trackPath, gen, bytes);
@@ -241,6 +329,7 @@ class ArtworkStore extends ChangeNotifier {
     _generation[trackPath] = generationOf(trackPath) + 1;
     final video = isVideoBytes(bytes);
     _remember(trackPath, video ? _headerOf(bytes) : bytes);
+    _posters.remove(trackPath);
     final key = _key(trackPath);
     final ext = artworkExtension(bytes);
     if (_cacheDir != null) {
@@ -249,6 +338,11 @@ class ArtworkStore extends ChangeNotifier {
         await _deleteSiblings(key, ext);
       } catch (_) {}
     }
+    if (video) {
+      unawaited(poster(trackPath));
+    } else {
+      unawaited(_deletePoster(key));
+    }
     notifyListeners();
   }
 
@@ -256,6 +350,8 @@ class ArtworkStore extends ChangeNotifier {
     if (fromPath == toPath) return;
     final bytes = _memory.remove(fromPath);
     if (bytes != null) _memory[toPath] = bytes;
+    final posterBytes = _posters.remove(fromPath);
+    if (posterBytes != null) _posters[toPath] = posterBytes;
     _generation[toPath] = generationOf(toPath) + 1;
     final fromKey = _key(fromPath);
     final toKey = _key(toPath);
@@ -267,11 +363,20 @@ class ArtworkStore extends ChangeNotifier {
         }
       } catch (_) {}
     }
+    try {
+      final fromPoster = _posterFile(fromKey);
+      if (await fromPoster.exists()) {
+        await fromPoster.copy(_posterFile(toKey).path);
+      }
+    } catch (_) {}
   }
 
   Future<void> invalidate(String trackPath) async {
     _memory.remove(trackPath);
+    _posters.remove(trackPath);
     _generation[trackPath] = generationOf(trackPath) + 1;
-    await _deleteSiblings(_key(trackPath), '');
+    final key = _key(trackPath);
+    await _deleteSiblings(key, '');
+    await _deletePoster(key);
   }
 }

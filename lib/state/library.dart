@@ -502,12 +502,20 @@ class LibraryController extends ChangeNotifier {
       composer: previous.composer,
       coverShape: previous.coverShape,
       tagsEdited: true,
+      uri: next.uri ?? previous.uri,
     );
   }
 
   Track _keepCoverShape(Track next, Track? previous) {
-    if (previous == null || next.coverShape == previous.coverShape) return next;
-    return next.copyWith(coverShape: previous.coverShape);
+    if (previous == null) return next;
+    var out = next;
+    if (next.coverShape != previous.coverShape) {
+      out = out.copyWith(coverShape: previous.coverShape);
+    }
+    if (out.uri == null && previous.uri != null) {
+      out = out.copyWith(uri: previous.uri);
+    }
+    return out;
   }
 
   Future<void> replaceTrack(Track updated, {String? fromPath}) async {

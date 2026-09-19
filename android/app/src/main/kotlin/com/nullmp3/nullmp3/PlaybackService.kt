@@ -7,7 +7,9 @@ import android.app.PendingIntent
 import android.app.Service
 import android.content.Intent
 import android.content.pm.ServiceInfo
+import android.media.AudioAttributes
 import android.media.AudioManager
+import android.media.AudioPlaybackConfiguration
 import android.os.Build
 import android.os.Handler
 import android.os.IBinder
@@ -19,6 +21,7 @@ import android.support.v4.media.session.PlaybackStateCompat
 import androidx.core.app.NotificationCompat
 import androidx.media.app.NotificationCompat.MediaStyle
 import androidx.media.session.MediaButtonReceiver
+import io.flutter.embedding.engine.FlutterEngineCache
 import io.flutter.plugin.common.MethodChannel
 
 class PlaybackService : Service() {
@@ -33,6 +36,10 @@ class PlaybackService : Service() {
     companion object {
         const val CHANNEL_ID = "nullmp3_playback"
         const val NOTIFICATION_ID = 42
+        const val ACTION_PLAY = "com.nullmp3.nullmp3.ACTION_PLAY"
+        const val ACTION_PAUSE = "com.nullmp3.nullmp3.ACTION_PAUSE"
+        const val ACTION_NEXT = "com.nullmp3.nullmp3.ACTION_NEXT"
+        const val ACTION_PREVIOUS = "com.nullmp3.nullmp3.ACTION_PREVIOUS"
         var channel: MethodChannel? = null
         var instance: PlaybackService? = null
             private set
@@ -48,6 +55,20 @@ class PlaybackService : Service() {
     private var positionMs = 0L
     private val mainHandler = Handler(Looper.getMainLooper())
     private var wakeLock: PowerManager.WakeLock? = null
+    private var otherMedia = false
+    private val playbackCallback =
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            object : AudioManager.AudioPlaybackCallback() {
+                override fun onPlaybackConfigChanged(configs: List<AudioPlaybackConfiguration>) {
+                    val others = otherMediaPlaying(configs)
+                    if (others == otherMedia) return
+                    otherMedia = others
+                    toFlutter(if (others) "otherMediaOn" else "otherMediaOff")
+                }
+            }
+        } else {
+            null
+        }
 
     override fun onCreate() {
         super.onCreate()
@@ -62,7 +83,7 @@ class PlaybackService : Service() {
             setCallback(
                 object : MediaSessionCompat.Callback() {
                     override fun onPlay() {
-                        toFlutter("play")
+                        sendPlay()
                     }
 
                     override fun onPause() {
@@ -86,6 +107,7 @@ class PlaybackService : Service() {
             )
             isActive = true
         }
+        listenOtherMedia(true)
         val first = pending
         pending = null
         if (first != null) {
@@ -96,8 +118,12 @@ class PlaybackService : Service() {
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
-        if (intent?.action == Intent.ACTION_MEDIA_BUTTON) {
-            MediaButtonReceiver.handleIntent(session, intent)
+        when (intent?.action) {
+            ACTION_PLAY -> sendPlay()
+            ACTION_PAUSE -> toFlutter("pause")
+            ACTION_NEXT -> toFlutter("next")
+            ACTION_PREVIOUS -> toFlutter("previous")
+            Intent.ACTION_MEDIA_BUTTON -> MediaButtonReceiver.handleIntent(session, intent)
         }
         val extras = intent?.extras
         if (extras != null && extras.containsKey("playing")) {
@@ -148,11 +174,21 @@ class PlaybackService : Service() {
         session?.isActive = true
         updateWakeLock()
         publishNotification()
+        refreshOtherMedia()
+    }
+
+    private fun sendPlay() {
+        if (otherMedia) toFlutter("otherMediaOn")
+        toFlutter("play")
     }
 
     private fun toFlutter(method: String) {
         mainHandler.post {
             try {
+                FlutterEngineCache.getInstance()
+                    .get(MainActivity.ENGINE_ID)
+                    ?.lifecycleChannel
+                    ?.appIsResumed()
                 channel?.invokeMethod(method, null)
             } catch (_: Exception) {
             }
@@ -186,6 +222,16 @@ class PlaybackService : Service() {
         }
     }
 
+    private fun actionIntent(action: String, requestCode: Int): PendingIntent {
+        val intent = Intent(this, PlaybackService::class.java).setAction(action)
+        val flags = PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+        return if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            PendingIntent.getForegroundService(this, requestCode, intent, flags)
+        } else {
+            PendingIntent.getService(this, requestCode, intent, flags)
+        }
+    }
+
     private fun buildNotification(): Notification {
         val launch =
             packageManager.getLaunchIntentForPackage(packageName)
@@ -202,19 +248,13 @@ class PlaybackService : Service() {
                 NotificationCompat.Action(
                     android.R.drawable.ic_media_pause,
                     "Pause",
-                    MediaButtonReceiver.buildMediaButtonPendingIntent(
-                        this,
-                        PlaybackStateCompat.ACTION_PAUSE,
-                    ),
+                    actionIntent(ACTION_PAUSE, 2),
                 )
             } else {
                 NotificationCompat.Action(
                     android.R.drawable.ic_media_play,
                     "Play",
-                    MediaButtonReceiver.buildMediaButtonPendingIntent(
-                        this,
-                        PlaybackStateCompat.ACTION_PLAY,
-                    ),
+                    actionIntent(ACTION_PLAY, 2),
                 )
             }
         val style =
@@ -237,10 +277,7 @@ class PlaybackService : Service() {
                 NotificationCompat.Action(
                     android.R.drawable.ic_media_previous,
                     "Previous",
-                    MediaButtonReceiver.buildMediaButtonPendingIntent(
-                        this,
-                        PlaybackStateCompat.ACTION_SKIP_TO_PREVIOUS,
-                    ),
+                    actionIntent(ACTION_PREVIOUS, 1),
                 ),
             )
             .addAction(playPauseAction)
@@ -248,10 +285,7 @@ class PlaybackService : Service() {
                 NotificationCompat.Action(
                     android.R.drawable.ic_media_next,
                     "Next",
-                    MediaButtonReceiver.buildMediaButtonPendingIntent(
-                        this,
-                        PlaybackStateCompat.ACTION_SKIP_TO_NEXT,
-                    ),
+                    actionIntent(ACTION_NEXT, 3),
                 ),
             )
             .build()
@@ -275,17 +309,16 @@ class PlaybackService : Service() {
     override fun onBind(intent: Intent?): IBinder? = null
 
     override fun onTaskRemoved(rootIntent: Intent?) {
-        if (playing) return
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N) {
-            stopForeground(STOP_FOREGROUND_REMOVE)
+        if (playing) {
+            applyUpdate(false, title, artist, durationMs, positionMs)
         } else {
-            @Suppress("DEPRECATION")
-            stopForeground(true)
+            publishNotification()
         }
-        stopSelf()
+        toFlutter("taskRemoved")
     }
 
     override fun onDestroy() {
+        listenOtherMedia(false)
         val lock = wakeLock
         wakeLock = null
         if (lock?.isHeld == true) lock.release()
@@ -294,5 +327,48 @@ class PlaybackService : Service() {
         session = null
         if (instance === this) instance = null
         super.onDestroy()
+    }
+
+    private fun listenOtherMedia(on: Boolean) {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.O) return
+        val callback = playbackCallback ?: return
+        val manager = getSystemService(AUDIO_SERVICE) as? AudioManager ?: return
+        try {
+            if (on) {
+                manager.registerAudioPlaybackCallback(callback, mainHandler)
+                refreshOtherMedia()
+            } else {
+                manager.unregisterAudioPlaybackCallback(callback)
+            }
+        } catch (_: Exception) {
+        }
+    }
+
+    private fun refreshOtherMedia() {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.O) return
+        val manager = getSystemService(AUDIO_SERVICE) as? AudioManager ?: return
+        val others =
+            try {
+                otherMediaPlaying(manager.activePlaybackConfigurations)
+            } catch (_: Exception) {
+                return
+            }
+        if (others == otherMedia) return
+        otherMedia = others
+        toFlutter(if (others) "otherMediaOn" else "otherMediaOff")
+    }
+
+    private fun otherMediaPlaying(configs: List<AudioPlaybackConfiguration>): Boolean {
+        var mediaCount = 0
+        for (config in configs) {
+            val usage = config.audioAttributes.usage
+            if (usage != AudioAttributes.USAGE_MEDIA && usage != AudioAttributes.USAGE_GAME) {
+                continue
+            }
+            mediaCount++
+        }
+        // Paused: our track is idle, so one media player is the other app.
+        // Playing: two media players means we are sitting next to it.
+        return if (playing) mediaCount >= 2 else mediaCount >= 1
     }
 }

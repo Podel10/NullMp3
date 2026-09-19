@@ -15,11 +15,13 @@ class Track {
     this.trackNumber,
     this.albumArtist,
     this.composer,
+    this.uri,
     this.coverShape = CoverShape.square,
     this.tagsEdited = false,
   });
 
   final String path;
+  final String? uri;
   final String title;
   final String artist;
   final String album;
@@ -55,6 +57,7 @@ class Track {
     int? trackNumber,
     String? albumArtist,
     String? composer,
+    String? uri,
     CoverShape? coverShape,
     bool? tagsEdited,
   }) {
@@ -70,6 +73,7 @@ class Track {
       trackNumber: trackNumber ?? this.trackNumber,
       albumArtist: albumArtist ?? this.albumArtist,
       composer: composer ?? this.composer,
+      uri: uri ?? this.uri,
       coverShape: coverShape ?? this.coverShape,
       tagsEdited: tagsEdited ?? this.tagsEdited,
     );
@@ -87,6 +91,7 @@ class Track {
         'trackNumber': trackNumber,
         'albumArtist': albumArtist,
         'composer': composer,
+        'uri': uri,
         'coverShape': coverShape.name,
         'tagsEdited': tagsEdited,
       };
@@ -103,6 +108,7 @@ class Track {
         trackNumber: json['trackNumber'] as int?,
         albumArtist: json['albumArtist'] as String?,
         composer: json['composer'] as String?,
+        uri: json['uri'] as String?,
         coverShape: CoverShape.values.firstWhere(
           (value) => value.name == json['coverShape'],
           orElse: () => CoverShape.square,

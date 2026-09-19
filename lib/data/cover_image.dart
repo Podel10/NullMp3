@@ -21,6 +21,32 @@ const _imageFtypBrands = {
   'avis',
 };
 
+Future<String?> playbackContentUri(String path) async {
+  if (kIsWeb || !Platform.isAndroid || path.isEmpty || path.startsWith('content:')) {
+    return path.startsWith('content:') ? path : null;
+  }
+  try {
+    final uri = await _filesChannel.invokeMethod<String>('playbackUri', {
+      'path': path,
+    }).timeout(const Duration(seconds: 2));
+    if (uri != null && uri.startsWith('content:')) return uri;
+  } catch (_) {}
+  return null;
+}
+
+Future<Uint8List?> grabVideoPoster(String path, {int maxSide = 360}) async {
+  if (kIsWeb || !Platform.isAndroid) return null;
+  try {
+    final data = await _filesChannel.invokeMethod<dynamic>('videoPoster', {
+      'path': path,
+      'maxSide': maxSide,
+    }).timeout(const Duration(seconds: 12));
+    final bytes = _asBytes(data);
+    if (bytes != null && bytes.length > 32) return bytes;
+  } catch (_) {}
+  return null;
+}
+
 Uint8List? _asBytes(dynamic data) {
   if (data is Uint8List) return data;
   if (data is List<int>) return Uint8List.fromList(data);
