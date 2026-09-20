@@ -88,6 +88,11 @@ const catalogEn = <String, String>{
       'Hidden tracks stay on the device but disappear from the library',
   'aboutBlurb':
       'A local music player: library tabs, mini player, now playing, equalizer, sleep timer, lyrics, and playlists.',
+  'supportProject': 'Support project',
+  'supportProjectHint': 'Send crypto if you want to support Null MP3. Tap an address to copy it.',
+  'supportBnbEth': 'BNB Smart Chain (BEP-20) / Ethereum (ERC-20)',
+  'supportTon': 'TON',
+  'supportAddressCopied': 'Address copied',
   'faq': 'FAQ',
   'faqMicQ': 'Why does it ask for the microphone?',
   'faqMicA':

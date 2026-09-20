@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:provider/provider.dart';
 
 import '../l10n/strings.dart';
@@ -109,6 +110,24 @@ class SettingsScreen extends StatelessWidget {
             title: Text(s.appName),
             subtitle: Text(s.aboutBlurb),
           ),
+          _Section(s.supportProject),
+          Padding(
+            padding: const EdgeInsets.fromLTRB(16, 0, 16, 8),
+            child: Text(
+              s.supportProjectHint,
+              style: Theme.of(context).textTheme.bodySmall,
+            ),
+          ),
+          _SupportAddressTile(
+            label: s.supportBnbEth,
+            address: '0x5Ac0E1472895F3457771558cC4EDeb712AB69F91',
+            copiedLabel: s.supportAddressCopied,
+          ),
+          _SupportAddressTile(
+            label: s.supportTon,
+            address: 'UQA_sZk8ChNLMx2AY_HnIGrS6DtRWgXe2DqsNuk5-F0i-pBB',
+            copiedLabel: s.supportAddressCopied,
+          ),
           _Section(s.faq),
           _FaqTile(question: s.faqMicQ, answer: s.faqMicA),
           _FaqTile(question: s.faqWavesQ, answer: s.faqWavesA),
@@ -124,6 +143,34 @@ class SettingsScreen extends StatelessWidget {
       builder: (context) => _LanguageDialog(current: settings.language),
     );
     if (selected != null) await settings.setLanguage(selected);
+  }
+}
+
+class _SupportAddressTile extends StatelessWidget {
+  const _SupportAddressTile({
+    required this.label,
+    required this.address,
+    required this.copiedLabel,
+  });
+
+  final String label;
+  final String address;
+  final String copiedLabel;
+
+  @override
+  Widget build(BuildContext context) {
+    return ListTile(
+      title: Text(label),
+      subtitle: Text(address),
+      trailing: const Icon(Icons.copy_rounded),
+      onTap: () async {
+        await Clipboard.setData(ClipboardData(text: address));
+        if (!context.mounted) return;
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text(copiedLabel)),
+        );
+      },
+    );
   }
 }
 

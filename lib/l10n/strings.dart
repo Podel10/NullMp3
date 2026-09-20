@@ -183,6 +183,11 @@ class S {
   String get nothingHidden => _('nothingHidden');
   String get hiddenHint => _('hiddenHint');
   String get aboutBlurb => _('aboutBlurb');
+  String get supportProject => _('supportProject');
+  String get supportProjectHint => _('supportProjectHint');
+  String get supportBnbEth => _('supportBnbEth');
+  String get supportTon => _('supportTon');
+  String get supportAddressCopied => _('supportAddressCopied');
   String get faq => _('faq');
   String get faqMicQ => _('faqMicQ');
   String get faqMicA => _('faqMicA');
