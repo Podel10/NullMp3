@@ -92,9 +92,16 @@ class _CoverArtState extends State<CoverArt> {
   Future<void> _load() async {
     final path = widget.track?.path;
     if (path == null) return;
-    final bytes = await ArtworkStore.instance.get(path);
+    var bytes = await ArtworkStore.instance.get(path);
     if (!mounted) return;
     if (widget.track?.path != path) return;
+    // Still covers must show the video's first frame, not an empty box while
+    // the header stub waits on a poster that never paints.
+    if (bytes != null && isVideoBytes(bytes) && !widget.animate) {
+      final shot = await ArtworkStore.instance.poster(path);
+      if (!mounted || widget.track?.path != path) return;
+      if (shot != null) bytes = shot;
+    }
     setState(() {
       _bytes = bytes;
     });

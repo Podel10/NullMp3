@@ -45,6 +45,22 @@ class WebAudioFile {
   final Uint8List? cover;
 }
 
+class WebAudioSearchHit {
+  const WebAudioSearchHit({
+    required this.title,
+    required this.artist,
+    required this.url,
+    this.durationMs = 0,
+    this.artworkUrl,
+  });
+
+  final String title;
+  final String artist;
+  final String url;
+  final int durationMs;
+  final String? artworkUrl;
+}
+
 class WebAudioProgress {
   const WebAudioProgress({
     required this.title,
@@ -98,24 +114,40 @@ WebAudioLink? _parseWebAudioUrl(String text) {
 }
 
 Future<Directory> webAudioOutputDir() async {
+  // Common user music drop folder — same Download the library already scans.
   if (!kIsWeb && Platform.isAndroid) {
-    final music = Directory('/storage/emulated/0/Music/NullMP3');
-    if (await _canWrite(music)) return music;
+    for (final path in const [
+      '/storage/emulated/0/Download',
+      '/storage/emulated/0/Downloads',
+    ]) {
+      final dir = Directory(path);
+      if (await _canWrite(dir)) return dir;
+    }
   }
   if (!kIsWeb && Platform.isWindows) {
     final home = Platform.environment['USERPROFILE'];
     if (home != null && home.isNotEmpty) {
-      final music = Directory(p.join(home, 'Music', 'NullMP3'));
-      if (await _canWrite(music)) return music;
+      for (final name in const ['Downloads', 'Download', 'Music']) {
+        final dir = Directory(p.join(home, name));
+        if (await _canWrite(dir)) return dir;
+      }
     }
   }
   final docs = await getApplicationDocumentsDirectory();
-  final dir = Directory(p.join(docs.path, 'NullMP3'));
+  final dir = Directory(p.join(docs.path, 'Download'));
   await dir.create(recursive: true);
   return dir;
 }
 
 typedef WebAudioProgressCb = void Function(WebAudioProgress progress);
+
+Future<List<WebAudioSearchHit>> searchWebAudio(
+  String query, {
+  bool Function()? isCancelled,
+  int limit = 25,
+}) {
+  return _WebAudioJob(isCancelled: isCancelled).search(query, limit: limit);
+}
 
 Future<List<WebAudioFile>> downloadWebAudio(
   String raw, {
@@ -155,6 +187,80 @@ class _WebAudioJob {
       throw const WebAudioException('offline');
     } catch (error, stack) {
       debugPrint('webAudio failed: $error\n$stack');
+      throw const WebAudioException('failed');
+    } finally {
+      _client.close(force: true);
+    }
+  }
+
+  Future<List<WebAudioSearchHit>> search(String query, {int limit = 25}) async {
+    try {
+      NetworkGate.requireOnline();
+      final q = query.trim();
+      if (q.isEmpty) throw const WebAudioException('badUrl');
+      if (parseWebAudioUrl(q) != null) {
+        throw const WebAudioException('badUrl');
+      }
+      final clientId = await _soundCloudClientId();
+      final uri = Uri.https('api-v2.soundcloud.com', '/search/tracks', {
+        'q': q,
+        'client_id': clientId,
+        'limit': '${limit.clamp(1, 50)}',
+        'app_locale': 'en',
+      });
+      final data = await _getJson(uri);
+      final rows = <Map<String, dynamic>>[];
+      if (data is Map) {
+        rows.addAll(_asMaps(data['collection']));
+      } else if (data is List) {
+        rows.addAll(_asMaps(data));
+      }
+      final hits = <WebAudioSearchHit>[];
+      for (final track in rows) {
+        final title = (track['title'] as String?)?.trim() ?? '';
+        if (title.isEmpty) continue;
+        final permalink = (track['permalink_url'] as String?)?.trim() ??
+            (track['uri'] as String?)?.trim() ??
+            '';
+        final url = permalink.isNotEmpty
+            ? permalink
+            : () {
+                final user = track['user'];
+                final userSlug = user is Map ? (user['permalink'] as String?)?.trim() : null;
+                final trackSlug = (track['permalink'] as String?)?.trim();
+                if (userSlug == null ||
+                    userSlug.isEmpty ||
+                    trackSlug == null ||
+                    trackSlug.isEmpty) {
+                  return '';
+                }
+                return 'https://soundcloud.com/$userSlug/$trackSlug';
+              }();
+        if (url.isEmpty) continue;
+        final user = track['user'];
+        final artist = user is Map
+            ? ((user['username'] as String?)?.trim().isNotEmpty == true
+                ? (user['username'] as String).trim()
+                : (user['permalink'] as String?)?.trim() ?? 'SoundCloud')
+            : 'SoundCloud';
+        final duration = (track['duration'] as num?)?.toInt() ?? 0;
+        hits.add(
+          WebAudioSearchHit(
+            title: title,
+            artist: artist,
+            url: url,
+            durationMs: duration,
+            artworkUrl: _soundArtwork(track['artwork_url'] as String?),
+          ),
+        );
+      }
+      return hits;
+    } on WebAudioException {
+      rethrow;
+    } on SocketException {
+      throw const WebAudioException('offline');
+    } catch (error, stack) {
+      debugPrint('webAudio search failed: $error\n$stack');
       throw const WebAudioException('failed');
     } finally {
       _client.close(force: true);

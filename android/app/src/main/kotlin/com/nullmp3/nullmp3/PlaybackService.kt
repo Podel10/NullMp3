@@ -5,6 +5,7 @@ import android.app.NotificationChannel
 import android.app.NotificationManager
 import android.app.PendingIntent
 import android.app.Service
+import android.content.Context
 import android.content.Intent
 import android.content.pm.ServiceInfo
 import android.media.AudioAttributes
@@ -41,6 +42,13 @@ class PlaybackService : Service() {
         const val ACTION_PAUSE = "com.nullmp3.nullmp3.ACTION_PAUSE"
         const val ACTION_NEXT = "com.nullmp3.nullmp3.ACTION_NEXT"
         const val ACTION_PREVIOUS = "com.nullmp3.nullmp3.ACTION_PREVIOUS"
+        private const val PREFS = "nullmp3_playback"
+        private const val KEY_HAS = "has"
+        private const val KEY_PLAYING = "playing"
+        private const val KEY_TITLE = "title"
+        private const val KEY_ARTIST = "artist"
+        private const val KEY_DURATION = "durationMs"
+        private const val KEY_POSITION = "positionMs"
         var channel: MethodChannel? = null
         var instance: PlaybackService? = null
             private set
@@ -50,6 +58,7 @@ class PlaybackService : Service() {
 
     private var session: MediaSessionCompat? = null
     private var playing = false
+    private var hasTrack = false
     private var title = "Null MP3"
     private var artist = ""
     private var durationMs = 0L
@@ -57,10 +66,25 @@ class PlaybackService : Service() {
     private val mainHandler = Handler(Looper.getMainLooper())
     private var wakeLock: PowerManager.WakeLock? = null
     private var otherMedia = false
+    private var phoneCall = false
+    private var modeListener: AudioManager.OnModeChangedListener? = null
+    private val keepAliveTick =
+        object : Runnable {
+            override fun run() {
+                if (!playing) return
+                // Android 14+ can demote a quiet media FGS. Touch the
+                // notification and wake lock while we still claim playing.
+                updateWakeLock()
+                publishNotification()
+                refreshPhoneCall()
+                mainHandler.postDelayed(this, 60_000L)
+            }
+        }
     private val playbackCallback =
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
             object : AudioManager.AudioPlaybackCallback() {
                 override fun onPlaybackConfigChanged(configs: List<AudioPlaybackConfiguration>) {
+                    refreshPhoneCall(configs)
                     val others = otherMediaPlaying(configs)
                     if (others == otherMedia) return
                     otherMedia = others
@@ -109,12 +133,27 @@ class PlaybackService : Service() {
             isActive = true
         }
         listenOtherMedia(true)
+        listenPhoneCall(true)
         val first = pending
         pending = null
         if (first != null) {
             applyUpdate(first.playing, first.title, first.artist, first.durationMs, first.positionMs)
         } else {
-            publishNotification()
+            // Process was killed and restarted with START_STICKY. Rebuild the
+            // media popup so Play is still reachable without opening the app.
+            val saved = loadSaved()
+            if (saved != null) {
+                applyUpdate(
+                    // Never auto-start audio after a kill — just restore the card.
+                    false,
+                    saved.title,
+                    saved.artist,
+                    saved.durationMs,
+                    saved.positionMs,
+                )
+            } else {
+                publishNotification()
+            }
         }
     }
 
@@ -147,10 +186,12 @@ class PlaybackService : Service() {
         positionMs: Long,
     ) {
         this.playing = playing
+        this.hasTrack = true
         this.title = title.ifBlank { "Null MP3" }
         this.artist = artist
         this.durationMs = durationMs
         this.positionMs = positionMs
+        saveState()
         val actions =
             PlaybackStateCompat.ACTION_PLAY or
                 PlaybackStateCompat.ACTION_PAUSE or
@@ -175,11 +216,11 @@ class PlaybackService : Service() {
         session?.isActive = true
         updateWakeLock()
         publishNotification()
+        scheduleKeepAlive()
         refreshOtherMedia()
     }
 
     private fun sendPlay() {
-        if (otherMedia) toFlutter("otherMediaOn")
         toFlutter("play")
     }
 
@@ -208,6 +249,11 @@ class PlaybackService : Service() {
             val lock = wakeLock ?: return
             if (lock.isHeld) lock.release()
         }
+    }
+
+    private fun scheduleKeepAlive() {
+        mainHandler.removeCallbacks(keepAliveTick)
+        if (playing) mainHandler.postDelayed(keepAliveTick, 60_000L)
     }
 
     private fun publishNotification() {
@@ -267,7 +313,11 @@ class PlaybackService : Service() {
             .setContentTitle(title)
             .setContentText(artist)
             .setContentIntent(contentIntent)
-            .setOngoing(playing)
+            // Stay pinned while a track is loaded. When only "playing" was
+            // ongoing, OEMs cleared the paused card in pocket/doze and left
+            // no Play button until the app was opened again.
+            .setOngoing(hasTrack || playing)
+            .setAutoCancel(false)
             .setOnlyAlertOnce(true)
             .setSilent(true)
             .setCategory(NotificationCompat.CATEGORY_TRANSPORT)
@@ -310,16 +360,15 @@ class PlaybackService : Service() {
     override fun onBind(intent: Intent?): IBinder? = null
 
     override fun onTaskRemoved(rootIntent: Intent?) {
-        if (playing) {
-            applyUpdate(false, title, artist, durationMs, positionMs)
-        } else {
-            publishNotification()
-        }
-        toFlutter("taskRemoved")
+        // Keep playing in the background. Only a phone call (or the user)
+        // should stop audio — not clearing the app from recents.
+        publishNotification()
     }
 
     override fun onDestroy() {
+        mainHandler.removeCallbacks(keepAliveTick)
         listenOtherMedia(false)
+        listenPhoneCall(false)
         val lock = wakeLock
         wakeLock = null
         if (lock?.isHeld == true) lock.release()
@@ -330,6 +379,45 @@ class PlaybackService : Service() {
         super.onDestroy()
     }
 
+    private fun saveState() {
+        try {
+            getSharedPreferences(PREFS, Context.MODE_PRIVATE)
+                .edit()
+                .putBoolean(KEY_HAS, true)
+                .putBoolean(KEY_PLAYING, playing)
+                .putString(KEY_TITLE, title)
+                .putString(KEY_ARTIST, artist)
+                .putLong(KEY_DURATION, durationMs)
+                .putLong(KEY_POSITION, positionMs)
+                .apply()
+        } catch (_: Exception) {
+        }
+    }
+
+    private fun loadSaved(): Update? {
+        return try {
+            val prefs = getSharedPreferences(PREFS, Context.MODE_PRIVATE)
+            if (!prefs.getBoolean(KEY_HAS, false)) return null
+            Update(
+                playing = prefs.getBoolean(KEY_PLAYING, false),
+                title = prefs.getString(KEY_TITLE, null) ?: "Null MP3",
+                artist = prefs.getString(KEY_ARTIST, null) ?: "",
+                durationMs = prefs.getLong(KEY_DURATION, 0L),
+                positionMs = prefs.getLong(KEY_POSITION, 0L),
+            )
+        } catch (_: Exception) {
+            null
+        }
+    }
+
+    fun clearSaved() {
+        try {
+            getSharedPreferences(PREFS, Context.MODE_PRIVATE).edit().clear().apply()
+        } catch (_: Exception) {
+        }
+        hasTrack = false
+    }
+
     private fun listenOtherMedia(on: Boolean) {
         if (Build.VERSION.SDK_INT < Build.VERSION_CODES.O) return
         val callback = playbackCallback ?: return
@@ -338,8 +426,28 @@ class PlaybackService : Service() {
             if (on) {
                 manager.registerAudioPlaybackCallback(callback, mainHandler)
                 refreshOtherMedia()
+                refreshPhoneCall()
             } else {
                 manager.unregisterAudioPlaybackCallback(callback)
+            }
+        } catch (_: Exception) {
+        }
+    }
+
+    private fun listenPhoneCall(on: Boolean) {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.S) return
+        val manager = getSystemService(AUDIO_SERVICE) as? AudioManager ?: return
+        try {
+            if (on) {
+                val listener =
+                    AudioManager.OnModeChangedListener { _ -> refreshPhoneCall() }
+                modeListener = listener
+                manager.addOnModeChangedListener(mainExecutor, listener)
+                refreshPhoneCall()
+            } else {
+                val listener = modeListener ?: return
+                modeListener = null
+                manager.removeOnModeChangedListener(listener)
             }
         } catch (_: Exception) {
         }
@@ -357,6 +465,39 @@ class PlaybackService : Service() {
         if (others == otherMedia) return
         otherMedia = others
         toFlutter(if (others) "otherMediaOn" else "otherMediaOff")
+    }
+
+    private fun refreshPhoneCall(configs: List<AudioPlaybackConfiguration>? = null) {
+        val active = phoneCallActive(configs)
+        if (active == phoneCall) return
+        phoneCall = active
+        toFlutter(if (active) "phoneCallOn" else "phoneCallOff")
+    }
+
+    private fun phoneCallActive(configs: List<AudioPlaybackConfiguration>? = null): Boolean {
+        val manager = getSystemService(AUDIO_SERVICE) as? AudioManager ?: return false
+        when (manager.mode) {
+            AudioManager.MODE_IN_CALL,
+            AudioManager.MODE_IN_COMMUNICATION,
+            AudioManager.MODE_RINGTONE,
+            -> return true
+        }
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.O) return false
+        val list =
+            configs
+                ?: try {
+                    manager.activePlaybackConfigurations
+                } catch (_: Exception) {
+                    return false
+                }
+        for (config in list) {
+            when (config.audioAttributes.usage) {
+                AudioAttributes.USAGE_VOICE_COMMUNICATION,
+                AudioAttributes.USAGE_VOICE_COMMUNICATION_SIGNALLING,
+                -> return true
+            }
+        }
+        return false
     }
 
     private fun otherMediaPlaying(configs: List<AudioPlaybackConfiguration>): Boolean {

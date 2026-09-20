@@ -593,6 +593,9 @@ class _VideoCoverState extends State<_VideoCover> {
       }
       await player.setVolume(0);
       await player.setLooping(true);
+      try {
+        await player.seekTo(Duration.zero);
+      } catch (_) {}
       player.addListener(_onVideoTick);
       _player = player;
       setState(() {});
@@ -736,6 +739,9 @@ Future<File?> _videoFile(Uint8List bytes, String? trackPath) async {
       }
     } catch (_) {}
   }
+  // ArtworkStore only keeps a short magic header in RAM. Writing that out as
+  // a "video" makes every decoder fail and the cover stays blank.
+  if (bytes.length <= 256 || !isVideoBytes(bytes)) return null;
   try {
     final dir = await getTemporaryDirectory();
     final ext = artworkExtension(bytes);

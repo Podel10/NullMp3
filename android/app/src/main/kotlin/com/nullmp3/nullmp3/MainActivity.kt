@@ -354,6 +354,7 @@ class MainActivity : FlutterActivity() {
                 }
                 "clear" -> {
                     try {
+                        PlaybackService.instance?.clearSaved()
                         stopService(Intent(this, PlaybackService::class.java))
                     } catch (_: Exception) {
                     }

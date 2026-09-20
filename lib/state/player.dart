@@ -64,8 +64,7 @@ class PlayerController extends ChangeNotifier with WidgetsBindingObserver {
   final SettingsController settings;
 
   // Created synchronously so the UI can bind streams immediately.
-  // Interruptions are handled below: keep playing when another app takes
-  // media focus, but still pause for phone calls and unplugged headphones.
+  // Keep playing over YouTube and other apps; only a phone call pauses us.
   // Equalizer must live in this pipeline or AndroidEqualizer.setEnabled is a no-op.
   final AndroidEqualizer _equalizer = AndroidEqualizer();
   late final AudioPlayer player = AudioPlayer(
@@ -104,15 +103,16 @@ class PlayerController extends ChangeNotifier with WidgetsBindingObserver {
   int _errorSkips = 0;
   int? _listenAnchorMs;
   bool _userPaused = true;
-  bool _mixWithOthers = false;
+  bool _mixWithOthers = true;
   bool _askedAllFilesNative = false;
   bool _otherMediaOn = false;
   bool _userStarted = false;
+  bool _pausedForInterruption = false;
+  bool _pausedForCall = false;
   DateTime? _ignoreFocusUntil;
   Duration _lastPosition = Duration.zero;
   DateTime? _lastSessionPush;
   DateTime? _lastSessionPersist;
-  StreamSubscription<void>? _noisySub;
   StreamSubscription<AudioInterruptionEvent>? _interruptSub;
   static const _session = MethodChannel('com.nullmp3.nullmp3/session');
   static const _files = MethodChannel('com.nullmp3.nullmp3/files');
@@ -159,21 +159,15 @@ class PlayerController extends ChangeNotifier with WidgetsBindingObserver {
           if (hasTrack) await resumePlayback();
         case 'pause':
           await pauseFromSystem();
-        case 'taskRemoved':
-          await pauseFromSystem();
         case 'otherMediaOn':
-          final already = _otherMediaOn;
           _otherMediaOn = true;
-          final justResumed =
-              _ignoreFocusUntil != null && DateTime.now().isBefore(_ignoreFocusUntil!);
-          if (justResumed) {
-            _mixWithOthers = true;
-          } else if (!already && playing && !_mixWithOthers) {
-            await pauseFromSystem();
-          }
+          _mixWithOthers = true;
         case 'otherMediaOff':
           _otherMediaOn = false;
-          if (playing) _mixWithOthers = false;
+        case 'phoneCallOn':
+          await _onPhoneCall(true);
+        case 'phoneCallOff':
+          await _onPhoneCall(false);
         case 'next':
           await next();
         case 'previous':
@@ -227,25 +221,50 @@ class PlayerController extends ChangeNotifier with WidgetsBindingObserver {
           androidWillPauseWhenDucked: false,
         ),
       ).timeout(const Duration(seconds: 2));
-      _noisySub = session.becomingNoisyEventStream.listen((_) {
-        unawaited(pauseFromSystem());
-      });
+      // Headphones unplug / focus fights must not stop background play.
+      // Phone calls are handled via phoneCallOn from PlaybackService.
       _interruptSub = session.interruptionEventStream.listen((event) {
         unawaited(_onAudioInterruption(event));
       });
     } catch (_) {}
   }
 
+  Future<void> _onPhoneCall(bool active) async {
+    if (active) {
+      if (_userPaused || !playing) return;
+      _pausedForCall = true;
+      _pausedForInterruption = false;
+      _lastPosition = _heldPosition();
+      try {
+        if (_useNative) {
+          await _nativePause();
+        } else {
+          await player.pause();
+        }
+      } catch (_) {}
+      _pushSession();
+      return;
+    }
+    if (!_pausedForCall || _userPaused) return;
+    _pausedForCall = false;
+    await resumePlayback(force: true);
+  }
+
   Future<void> _onAudioInterruption(AudioInterruptionEvent event) async {
-    if (_mixWithOthers || _userPaused || !playing) return;
-    if (_ignoreFocusUntil != null && DateTime.now().isBefore(_ignoreFocusUntil!)) return;
-    if (!event.begin) return;
+    // Ignore YouTube / notifications / OEM focus blips. Only the native
+    // phone-call watcher may pause playback.
     if (event.type == AudioInterruptionType.duck) return;
-    await pauseFromSystem();
+    if (event.begin) return;
+    if (_pausedForCall && !_userPaused && !playing) {
+      _pausedForCall = false;
+      await resumePlayback(force: true);
+    }
   }
 
   Future<void> pauseFromSystem() async {
-    _mixWithOthers = false;
+    _mixWithOthers = true;
+    _pausedForInterruption = false;
+    _pausedForCall = false;
     if (!playing && !player.playing) {
       _userPaused = true;
       _pushSession();
@@ -266,7 +285,12 @@ class PlayerController extends ChangeNotifier with WidgetsBindingObserver {
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
     if (state == AppLifecycleState.resumed) {
-      if (playing) unawaited(_keepAudioAlive());
+      if (playing || _pausedForCall) unawaited(_keepAudioAlive());
+      if (_pausedForCall && !_userPaused && !playing) {
+        // Call ended while we were backgrounded; resume if the watcher missed it.
+        _pausedForCall = false;
+        unawaited(resumePlayback(force: true));
+      }
       return;
     }
     if (state != AppLifecycleState.paused && state != AppLifecycleState.hidden) {
@@ -285,10 +309,11 @@ class PlayerController extends ChangeNotifier with WidgetsBindingObserver {
 
   Future<void> resumePlayback({Duration? limit, bool force = false}) async {
     _userPaused = false;
+    _pausedForInterruption = false;
+    _pausedForCall = false;
     _userStarted = true;
-    // Mix only when another app is already using media. A normal Play must
-    // stay exclusive so a later YouTube/etc. start still auto-pauses us.
-    _mixWithOthers = _otherMediaOn;
+    // Always mix: YouTube and friends must not stop Null MP3.
+    _mixWithOthers = true;
     _ignoreFocusUntil = DateTime.now().add(const Duration(seconds: 2));
     // play() during setAudioSource throws "Loading interrupted" and the
     // startup restore loop then looks like a frozen app.
@@ -494,7 +519,9 @@ class PlayerController extends ChangeNotifier with WidgetsBindingObserver {
     _userStarted = true;
     if (!hasTrack) return;
     if (playing || player.playing) {
-      _mixWithOthers = false;
+      _mixWithOthers = true;
+      _pausedForInterruption = false;
+      _pausedForCall = false;
       _userPaused = true;
       _lastPosition = _heldPosition();
       _ignoreFocusUntil = DateTime.now().add(const Duration(seconds: 2));
@@ -1186,7 +1213,6 @@ class PlayerController extends ChangeNotifier with WidgetsBindingObserver {
     WidgetsBinding.instance.removeObserver(this);
     _flushListenClock();
     _sleepTimer?.cancel();
-    unawaited(_noisySub?.cancel());
     unawaited(_interruptSub?.cancel());
     _nativeTimer?.cancel();
     unawaited(_nativeStop());

@@ -218,6 +218,10 @@ class S {
   String get downloadAudioLink => _('downloadAudioLink');
   String get downloadAudioPaste => _('downloadAudioPaste');
   String get downloadAudioGo => _('downloadAudioGo');
+  String get downloadAudioSearch => _('downloadAudioSearch');
+  String get downloadAudioSearching => _('downloadAudioSearching');
+  String get downloadAudioNoResults => _('downloadAudioNoResults');
+  String get downloadAudioPick => _('downloadAudioPick');
   String get downloadAudioBusy => _('downloadAudioBusy');
   String get downloadAudioTagging => _('downloadAudioTagging');
   String get downloadAudioOffline => _('downloadAudioOffline');

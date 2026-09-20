@@ -135,9 +135,10 @@ class ArtworkStore extends ChangeNotifier {
 
   Future<Uint8List?> poster(String trackPath) {
     if (trackPath.isEmpty) return Future<Uint8List?>.value(null);
-    if (_posters.containsKey(trackPath)) {
-      return Future<Uint8List?>.value(_posters[trackPath]);
-    }
+    final hit = _posters[trackPath];
+    // Only cache successful posters. A failed attempt must retry when the
+    // video file shows up a moment later.
+    if (hit != null) return Future<Uint8List?>.value(hit);
     return _posterInflight.putIfAbsent(trackPath, () async {
       try {
         return await _loadPoster(trackPath);
@@ -152,7 +153,10 @@ class ArtworkStore extends ChangeNotifier {
       final cached = await poster(trackPath);
       if (cached != null) return cached;
     }
+    // List covers only keep a tiny video header in memory — never treat that
+    // stub as a real file or MediaMetadataRetriever returns nothing.
     if (bytes.length <= _videoHeader) return null;
+    if (!isVideoBytes(bytes)) return null;
     try {
       final dir = await getTemporaryDirectory();
       final ext = artworkExtension(bytes);
@@ -164,10 +168,7 @@ class ArtworkStore extends ChangeNotifier {
       final shot = await grabVideoPoster(file.path);
       if (shot == null || shot.length < 32) return null;
       if (trackPath != null && trackPath.isNotEmpty) {
-        _posters[trackPath] = shot;
-        try {
-          await _posterFile(_key(trackPath)).writeAsBytes(shot, flush: false);
-        } catch (_) {}
+        _rememberPoster(trackPath, shot);
       }
       return shot;
     } catch (_) {
@@ -191,20 +192,20 @@ class ArtworkStore extends ChangeNotifier {
     try {
       media = await mediaFile(trackPath);
     } catch (_) {}
-    if (media == null) {
-      _posters[trackPath] = null;
-      return null;
-    }
+    if (media == null) return null;
     final shot = await grabVideoPoster(media.path);
-    if (shot == null || shot.length < 32) {
-      _posters[trackPath] = null;
-      return null;
-    }
+    if (shot == null || shot.length < 32) return null;
     try {
       await file.writeAsBytes(shot, flush: false);
     } catch (_) {}
-    _posters[trackPath] = shot;
+    _rememberPoster(trackPath, shot);
     return shot;
+  }
+
+  void _rememberPoster(String trackPath, Uint8List shot) {
+    _posters[trackPath] = shot;
+    _generation[trackPath] = generationOf(trackPath) + 1;
+    notifyListeners();
   }
 
   Future<Uint8List?> _load(String trackPath) async {
@@ -215,7 +216,7 @@ class ArtworkStore extends ChangeNotifier {
         final media = await mediaFile(trackPath);
         if (media != null) {
           final header = await _readPrefix(media, _videoHeader);
-          unawaited(poster(trackPath));
+          await poster(trackPath);
           return _finishLoad(trackPath, gen, header);
         }
       } catch (_) {}
@@ -225,14 +226,14 @@ class ArtworkStore extends ChangeNotifier {
       try {
         if (_isVideoPath(cached.path)) {
           final header = await _readPrefix(cached, _videoHeader);
-          unawaited(poster(trackPath));
+          await poster(trackPath);
           return _finishLoad(trackPath, gen, header);
         }
         final bytes = await cached.readAsBytes();
         final value = bytes.isEmpty ? null : bytes;
         if (value != null && isVideoBytes(value)) {
-          unawaited(_storeVideoFile(key, value));
-          unawaited(poster(trackPath));
+          await _storeVideoFile(key, value);
+          await poster(trackPath);
           return _finishLoad(trackPath, gen, _headerOf(value));
         }
         return _finishLoad(trackPath, gen, value);
@@ -250,7 +251,7 @@ class ArtworkStore extends ChangeNotifier {
     if (generationOf(trackPath) != gen) return _memory[trackPath];
     if (bytes != null && isVideoBytes(bytes)) {
       await _storeVideoFile(key, bytes);
-      unawaited(poster(trackPath));
+      await poster(trackPath);
       return _finishLoad(trackPath, gen, _headerOf(bytes));
     }
     final kept = _finishLoad(trackPath, gen, bytes);
@@ -357,12 +358,13 @@ class ArtworkStore extends ChangeNotifier {
         await _deleteSiblings(key, ext);
       } catch (_) {}
     }
+    notifyListeners();
     if (video) {
-      unawaited(poster(trackPath));
+      // Await the first frame so list tiles / still covers are not empty.
+      await poster(trackPath);
     } else {
       unawaited(_deletePoster(key));
     }
-    notifyListeners();
   }
 
   Future<void> rekey(String fromPath, String toPath) async {

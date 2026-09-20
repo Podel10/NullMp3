@@ -25,20 +25,28 @@ class _WebAudioScreenState extends State<WebAudioScreen> {
   final _link = TextEditingController();
   final _focus = FocusNode();
   bool _busy = false;
+  bool _searching = false;
   bool _cancel = false;
   String? _error;
   WebAudioProgress? _progress;
   final List<WebAudioFile> _done = [];
+  final List<WebAudioSearchHit> _hits = [];
 
   @override
   void initState() {
     super.initState();
+    _link.addListener(_onLinkChanged);
     unawaited(_pasteClipboard(onlyIfEmpty: true));
+  }
+
+  void _onLinkChanged() {
+    if (mounted) setState(() {});
   }
 
   @override
   void dispose() {
     _cancel = true;
+    _link.removeListener(_onLinkChanged);
     _link.dispose();
     _focus.dispose();
     super.dispose();
@@ -60,10 +68,72 @@ class _WebAudioScreenState extends State<WebAudioScreen> {
     } catch (_) {}
   }
 
-  Future<void> _download() async {
-    final s = context.s;
+  Future<void> _submit() async {
     final raw = _link.text.trim();
-    if (raw.isEmpty || parseWebAudioUrl(raw) == null) {
+    if (raw.isEmpty) {
+      setState(() => _error = context.s.downloadAudioBadLink);
+      return;
+    }
+    if (parseWebAudioUrl(raw) != null) {
+      await _download(raw);
+      return;
+    }
+    await _search(raw);
+  }
+
+  Future<void> _search(String query) async {
+    final s = context.s;
+    if (NetworkGate.offline) {
+      setState(() => _error = s.downloadAudioOffline);
+      return;
+    }
+
+    setState(() {
+      _searching = true;
+      _busy = false;
+      _cancel = false;
+      _error = null;
+      _progress = null;
+      _hits.clear();
+      _done.clear();
+    });
+
+    try {
+      final hits = await searchWebAudio(
+        query,
+        isCancelled: () => _cancel || !mounted,
+      );
+      if (!mounted) return;
+      setState(() {
+        _searching = false;
+        _hits
+          ..clear()
+          ..addAll(hits);
+        if (hits.isEmpty) _error = s.downloadAudioNoResults;
+      });
+    } on WebAudioException catch (error) {
+      if (!mounted) return;
+      setState(() {
+        _searching = false;
+        _error = switch (error.code) {
+          'offline' => s.downloadAudioOffline,
+          'cancelled' => s.downloadAudioCancelled,
+          'badUrl' => s.downloadAudioBadLink,
+          _ => s.downloadAudioFailed,
+        };
+      });
+    } catch (_) {
+      if (!mounted) return;
+      setState(() {
+        _searching = false;
+        _error = s.downloadAudioFailed;
+      });
+    }
+  }
+
+  Future<void> _download(String raw) async {
+    final s = context.s;
+    if (raw.trim().isEmpty || parseWebAudioUrl(raw) == null) {
       setState(() => _error = s.downloadAudioBadLink);
       return;
     }
@@ -78,6 +148,7 @@ class _WebAudioScreenState extends State<WebAudioScreen> {
 
     setState(() {
       _busy = true;
+      _searching = false;
       _cancel = false;
       _error = null;
       _progress = null;
@@ -136,11 +207,20 @@ class _WebAudioScreenState extends State<WebAudioScreen> {
     }
   }
 
+  String _formatDuration(int ms) {
+    if (ms <= 0) return '';
+    final total = (ms / 1000).round();
+    final m = total ~/ 60;
+    final s = total % 60;
+    return '$m:${s.toString().padLeft(2, '0')}';
+  }
+
   @override
   Widget build(BuildContext context) {
     final s = context.s;
     final theme = Theme.of(context);
     final progress = _progress;
+    final locked = _busy || _searching;
     return Scaffold(
       appBar: AppBar(title: Text(s.downloadAudio)),
       body: ListView(
@@ -151,44 +231,62 @@ class _WebAudioScreenState extends State<WebAudioScreen> {
           TextField(
             controller: _link,
             focusNode: _focus,
-            enabled: !_busy,
-            keyboardType: TextInputType.url,
+            enabled: !locked,
+            keyboardType: TextInputType.text,
             textInputAction: TextInputAction.go,
             autocorrect: false,
-            onSubmitted: _busy ? null : (_) => unawaited(_download()),
+            onSubmitted: locked ? null : (_) => unawaited(_submit()),
             decoration: InputDecoration(
               labelText: s.downloadAudioLink,
-              hintText: 'https://soundcloud.com/…',
+              hintText: 'Song name or https://soundcloud.com/…',
               border: const OutlineInputBorder(),
               suffixIcon: IconButton(
                 tooltip: s.downloadAudioPaste,
-                onPressed: _busy ? null : () => _pasteClipboard(),
+                onPressed: locked ? null : () => _pasteClipboard(),
                 icon: const Icon(Icons.content_paste_rounded),
               ),
             ),
           ),
           const SizedBox(height: 16),
           FilledButton.icon(
-            onPressed: _busy ? null : _download,
-            icon: const Icon(Icons.download_rounded),
-            label: Text(_busy ? s.downloadAudioBusy : s.downloadAudioGo),
+            onPressed: locked ? null : () => unawaited(_submit()),
+            icon: Icon(
+              parseWebAudioUrl(_link.text.trim()) != null
+                  ? Icons.download_rounded
+                  : Icons.search_rounded,
+            ),
+            label: Text(
+              _busy
+                  ? s.downloadAudioBusy
+                  : _searching
+                      ? s.downloadAudioSearching
+                      : parseWebAudioUrl(_link.text.trim()) != null
+                          ? s.downloadAudioGo
+                          : s.downloadAudioSearch,
+            ),
           ),
-          if (_busy) ...[
+          if (locked) ...[
             const SizedBox(height: 12),
             OutlinedButton(
               onPressed: () => setState(() => _cancel = true),
               child: Text(s.cancel),
             ),
-            const SizedBox(height: 16),
-            LinearProgressIndicator(value: progress?.fraction),
-            if (progress != null) ...[
-              const SizedBox(height: 8),
-              Text(
-                progress.stage == 'tag'
-                    ? s.downloadAudioTagging
-                    : s.downloadAudioItem(progress.index, progress.total, progress.title),
-                style: theme.textTheme.bodySmall,
-              ),
+            if (_busy) ...[
+              const SizedBox(height: 16),
+              LinearProgressIndicator(value: progress?.fraction),
+              if (progress != null) ...[
+                const SizedBox(height: 8),
+                Text(
+                  progress.stage == 'tag'
+                      ? s.downloadAudioTagging
+                      : s.downloadAudioItem(progress.index, progress.total, progress.title),
+                  style: theme.textTheme.bodySmall,
+                ),
+              ],
+            ],
+            if (_searching) ...[
+              const SizedBox(height: 16),
+              const LinearProgressIndicator(),
             ],
           ],
           if (_error != null) ...[
@@ -197,6 +295,46 @@ class _WebAudioScreenState extends State<WebAudioScreen> {
               _error!,
               style: theme.textTheme.bodyMedium?.copyWith(color: theme.colorScheme.error),
             ),
+          ],
+          if (_hits.isNotEmpty) ...[
+            const SizedBox(height: 20),
+            Text(s.downloadAudioPick, style: theme.textTheme.titleSmall),
+            const SizedBox(height: 8),
+            for (final hit in _hits)
+              ListTile(
+                contentPadding: EdgeInsets.zero,
+                enabled: !locked,
+                leading: hit.artworkUrl == null
+                    ? CircleAvatar(
+                        backgroundColor: theme.colorScheme.surfaceContainerHighest,
+                        child: const Icon(Icons.music_note_rounded, size: 20),
+                      )
+                    : ClipRRect(
+                        borderRadius: BorderRadius.circular(8),
+                        child: Image.network(
+                          hit.artworkUrl!,
+                          width: 48,
+                          height: 48,
+                          fit: BoxFit.cover,
+                          errorBuilder: (_, _, _) => const SizedBox(
+                            width: 48,
+                            height: 48,
+                            child: Icon(Icons.music_note_rounded),
+                          ),
+                        ),
+                      ),
+                title: Text(hit.title, maxLines: 1, overflow: TextOverflow.ellipsis),
+                subtitle: Text(
+                  [
+                    hit.artist,
+                    if (_formatDuration(hit.durationMs).isNotEmpty) _formatDuration(hit.durationMs),
+                  ].join(' • '),
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                ),
+                trailing: const Icon(Icons.download_rounded),
+                onTap: locked ? null : () => unawaited(_download(hit.url)),
+              ),
           ],
           if (_done.isNotEmpty) ...[
             const SizedBox(height: 20),
