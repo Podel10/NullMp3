@@ -90,6 +90,8 @@ class SettingsController extends ChangeNotifier {
   bool useCustomAccent = false;
   String? wallpaperPath;
   double wallpaperBlur = 0.45;
+  /// Bumps when gallery wallpaper bytes change so Image.file reloads.
+  int wallpaperRevision = 0;
   /// Desktop UI zoom (1.0 = 100%). Windows Ctrl+/−/0.
   double uiScale = 1.0;
   int minDurationSec = 0;
@@ -272,22 +274,78 @@ class SettingsController extends ChangeNotifier {
         await Permission.photos.request();
       } catch (_) {}
     }
-    final result = await FilePicker.pickFiles(
-      dialogTitle: S(language).chooseWallpaper,
-      type: FileType.image,
-    );
-    String? source;
-    for (final file in result) {
-      source = file.path ?? (file.uri.scheme == 'file' ? file.uri.toFilePath() : null);
-      if (source != null && source.isNotEmpty) break;
+
+    Uint8List? bytes;
+    String ext = '.jpg';
+
+    if (!kIsWeb && Platform.isAndroid) {
+      try {
+        const channel = MethodChannel('com.nullmp3.nullmp3/files');
+        final data = await channel.invokeMethod<dynamic>('pickImage');
+        if (data is Uint8List && data.isNotEmpty) {
+          bytes = data;
+        } else if (data is List<int> && data.isNotEmpty) {
+          bytes = Uint8List.fromList(data);
+        }
+      } catch (_) {
+        return;
+      }
+      if (bytes == null || bytes.isEmpty) return;
+      if (bytes.length >= 8 && bytes[0] == 0x89 && bytes[1] == 0x50) {
+        ext = '.png';
+      } else if (bytes.length >= 6 &&
+          bytes[0] == 0x47 &&
+          bytes[1] == 0x49 &&
+          bytes[2] == 0x46) {
+        ext = '.gif';
+      } else if (bytes.length >= 12 &&
+          bytes[0] == 0x52 &&
+          bytes[1] == 0x49 &&
+          bytes[2] == 0x46 &&
+          bytes[8] == 0x57) {
+        ext = '.webp';
+      } else {
+        ext = '.jpg';
+      }
+    } else {
+      final file = await FilePicker.pickFile(
+        dialogTitle: S(language).chooseWallpaper,
+        type: FileType.image,
+        windowsOptions: const WindowsOptions(lockParentWindow: true),
+      );
+      if (file == null) return;
+      final raw = await file.readAsBytes();
+      if (raw.isEmpty) return;
+      bytes = Uint8List.fromList(raw);
+      final name = file.name;
+      final fromName = p.extension(name).toLowerCase();
+      if (fromName.isNotEmpty) {
+        ext = fromName;
+      } else if (file.path != null && file.path!.isNotEmpty) {
+        final fromPath = p.extension(file.path!).toLowerCase();
+        if (fromPath.isNotEmpty) ext = fromPath;
+      }
     }
-    if (source == null) return;
+
     final support = await getApplicationSupportDirectory();
-    final dest = File(p.join(support.path, 'theme_wallpaper${p.extension(source)}'));
-    await File(source).copy(dest.path);
+    final dest = File(
+      p.join(support.path, 'theme_wallpaper_${DateTime.now().millisecondsSinceEpoch}$ext'),
+    );
+    await dest.writeAsBytes(bytes, flush: true);
+
+    final previous = wallpaperPath;
     wallpaperPath = dest.path;
+    wallpaperRevision++;
     await _prefs.setString(_kWallpaper, dest.path);
     await setThemeId(AppThemeId.gallery);
+    notifyListeners();
+
+    if (previous != null && previous != dest.path) {
+      try {
+        final old = File(previous);
+        if (await old.exists()) await old.delete();
+      } catch (_) {}
+    }
   }
 
   Future<void> setThemeMode(ThemeMode mode) async {

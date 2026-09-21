@@ -21,8 +21,9 @@ class AppWallpaper extends StatelessWidget {
     final sigma = settings.wallpaperBlur * 80;
     Widget image = Image.file(
       File(settings.wallpaperPath!),
+      key: ValueKey<String>('wall-${settings.wallpaperRevision}-${settings.wallpaperPath}'),
       fit: BoxFit.cover,
-      gaplessPlayback: true,
+      gaplessPlayback: false,
       filterQuality: settings.wallpaperBlur > 0.05 ? FilterQuality.low : FilterQuality.medium,
     );
     if (sigma > 0.4) {
