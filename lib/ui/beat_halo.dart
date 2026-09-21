@@ -10,6 +10,9 @@ import 'package:permission_handler/permission_handler.dart';
 
 import '../data/artwork.dart';
 import '../data/cover_rim.dart';
+import '../data/crash_log.dart';
+import '../data/desktop_halo.dart';
+import '../data/mp3_cut.dart';
 
 class BeatHalo extends StatefulWidget {
   const BeatHalo({
@@ -23,6 +26,8 @@ class BeatHalo extends StatefulWidget {
     this.artworkPath,
     this.sessionId,
     this.sessionIds,
+    this.positionStream,
+    this.durationOf,
   });
 
   final Widget child;
@@ -34,6 +39,9 @@ class BeatHalo extends StatefulWidget {
   final String? artworkPath;
   final int? sessionId;
   final Stream<int?>? sessionIds;
+  /// Desktop: map file envelope to the playhead.
+  final Stream<Duration>? positionStream;
+  final Duration Function()? durationOf;
 
   @override
   State<BeatHalo> createState() => _BeatHaloState();
@@ -48,6 +56,7 @@ class _BeatHaloState extends State<BeatHalo>
   late final Ticker _ticker;
   StreamSubscription<dynamic>? _sub;
   StreamSubscription<int?>? _sessionSub;
+  StreamSubscription<Duration>? _positionSub;
   final List<double> _peaks = List<double>.filled(32, 0);
   double _energy = 0;
   double _bass = 0;
@@ -56,11 +65,13 @@ class _BeatHaloState extends State<BeatHalo>
   int _syncGen = 0;
   int _rimGen = 0;
   int _artGen = -1;
+  int _envGen = 0;
   bool _live = false;
   bool _capturePaused = true;
   bool _backgrounded = false;
   DateTime? _lastDataAt;
   DateTime? _restartAt;
+  DateTime? _lastUiAt;
   List<Color> _rim = const [];
   CoverRimSequence _rimLoop = CoverRimSequence.empty;
   bool _rimLive = false;
@@ -69,8 +80,17 @@ class _BeatHaloState extends State<BeatHalo>
   Duration _rimFrozen = Duration.zero;
   Stopwatch? _rimClock;
   StreamSubscription<CoverRimLiveFrame>? _rimLiveSub;
+  List<double>? _desktopEnvelope;
+  String? _desktopEnvelopePath;
+  Duration _position = Duration.zero;
 
   Timer? _startTimer;
+
+  static bool get _isDesktop =>
+      !kIsWeb &&
+      (defaultTargetPlatform == TargetPlatform.windows ||
+          defaultTargetPlatform == TargetPlatform.linux ||
+          defaultTargetPlatform == TargetPlatform.macOS);
 
   @override
   void initState() {
@@ -78,8 +98,9 @@ class _BeatHaloState extends State<BeatHalo>
     WidgetsBinding.instance.addObserver(this);
     _sessionId = widget.sessionId;
     _ticker = createTicker(_onTick);
-    if (widget.enabled) _ticker.start();
+    _syncTicker();
     _sessionSub = widget.sessionIds?.listen(_onSession);
+    _positionSub = widget.positionStream?.listen((pos) => _position = pos);
     ArtworkStore.instance.addListener(_onArtwork);
     _rimLiveSub = CoverRimLive.instance.stream.listen(_onLiveRim);
     if (!kIsWeb && defaultTargetPlatform == TargetPlatform.android) {
@@ -90,6 +111,7 @@ class _BeatHaloState extends State<BeatHalo>
     }
     _scheduleCapture();
     unawaited(_loadRim());
+    unawaited(_loadDesktopEnvelope());
   }
 
   @override
@@ -100,7 +122,8 @@ class _BeatHaloState extends State<BeatHalo>
       _backgrounded = false;
       _live = false;
       _capturePaused = true;
-      if (widget.playing && widget.enabled) _scheduleCapture(force: true);
+      _syncTicker();
+      if (widget.playing && widget.enabled) _scheduleCapture();
       return;
     }
     if (state != AppLifecycleState.paused && state != AppLifecycleState.hidden) {
@@ -108,6 +131,7 @@ class _BeatHaloState extends State<BeatHalo>
     }
     _backgrounded = true;
     _pauseCapture();
+    _syncTicker();
   }
 
   @override
@@ -116,6 +140,10 @@ class _BeatHaloState extends State<BeatHalo>
     if (oldWidget.sessionIds != widget.sessionIds) {
       _sessionSub?.cancel();
       _sessionSub = widget.sessionIds?.listen(_onSession);
+    }
+    if (oldWidget.positionStream != widget.positionStream) {
+      _positionSub?.cancel();
+      _positionSub = widget.positionStream?.listen((pos) => _position = pos);
     }
     if (widget.sessionId != oldWidget.sessionId &&
         widget.sessionId != null &&
@@ -127,11 +155,8 @@ class _BeatHaloState extends State<BeatHalo>
       if (widget.playing && widget.enabled) _scheduleCapture();
     }
     if (oldWidget.enabled != widget.enabled) {
-      if (widget.enabled) {
-        if (!_ticker.isTicking) _ticker.start();
-      } else if (_ticker.isTicking) {
-        _ticker.stop();
-      }
+      _syncTicker();
+      if (widget.enabled) unawaited(_loadDesktopEnvelope());
     }
     if (oldWidget.enabled != widget.enabled || oldWidget.playing != widget.playing) {
       if (!widget.enabled) {
@@ -140,12 +165,16 @@ class _BeatHaloState extends State<BeatHalo>
         _live = false;
       }
       _scheduleCapture();
+      _syncTicker();
     }
     if (oldWidget.playing != widget.playing) _syncRimClock();
     if (oldWidget.artworkPath != widget.artworkPath || oldWidget.advanced != widget.advanced) {
       _coverFrame = null;
       _rimFromCover = false;
       _rimLive = false;
+    }
+    if (oldWidget.artworkPath != widget.artworkPath) {
+      unawaited(_loadDesktopEnvelope());
     }
     if (oldWidget.artworkPath != widget.artworkPath ||
         oldWidget.circle != widget.circle ||
@@ -159,9 +188,11 @@ class _BeatHaloState extends State<BeatHalo>
   void dispose() {
     WidgetsBinding.instance.removeObserver(this);
     _startTimer?.cancel();
+    _pauseCapture();
     ArtworkStore.instance.removeListener(_onArtwork);
     _sub?.cancel();
     _sessionSub?.cancel();
+    _positionSub?.cancel();
     _rimLiveSub?.cancel();
     _rimClock?.stop();
     _ticker.dispose();
@@ -188,6 +219,11 @@ class _BeatHaloState extends State<BeatHalo>
       _resetRimClock();
       if (_rim.isNotEmpty && mounted) setState(() => _rim = const []);
       return;
+    }
+    // Let Visualizer + cover paint settle before scanning GIF frames.
+    if (widget.advanced) {
+      await Future<void>.delayed(const Duration(milliseconds: 350));
+      if (!mounted || gen != _rimGen) return;
     }
     _artGen = ArtworkStore.instance.generationOf(path);
     final bytes = await ArtworkStore.instance.get(path);
@@ -277,6 +313,21 @@ class _BeatHaloState extends State<BeatHalo>
     }
   }
 
+  void _syncTicker() {
+    final wantsTick = widget.enabled &&
+        !_backgrounded &&
+        (widget.playing ||
+            _pulse > 0.002 ||
+            _energy > 0.002 ||
+            _bass > 0.002 ||
+            (_rimLoop.isAnimated && !_rimLive && !_rimFromCover));
+    if (wantsTick) {
+      if (!_ticker.isTicking) _ticker.start();
+    } else if (_ticker.isTicking) {
+      _ticker.stop();
+    }
+  }
+
   void _onSession(int? id) {
     if (id == null || id <= 0) return;
     if (_sessionId == id) return;
@@ -304,7 +355,11 @@ class _BeatHaloState extends State<BeatHalo>
   }
 
   void _onTick(Duration _) {
-    if (!mounted) return;
+    if (!mounted || _backgrounded) {
+      if (_ticker.isTicking) _ticker.stop();
+      return;
+    }
+    if (_isDesktop) _driveDesktopHalo();
     _maybeRestartCapture();
     _syncRimClock();
     var rimChanged = false;
@@ -317,7 +372,10 @@ class _BeatHaloState extends State<BeatHalo>
     }
     final decayPulse = _pulse > 0.002;
     final idle = !widget.playing && (_energy > 0.002 || _bass > 0.002);
-    if (!rimChanged && !decayPulse && !idle) return;
+    if (!rimChanged && !decayPulse && !idle) {
+      _syncTicker();
+      return;
+    }
     setState(() {
       if (decayPulse) _pulse *= 0.88;
       if (idle) {
@@ -327,6 +385,76 @@ class _BeatHaloState extends State<BeatHalo>
         for (var i = 0; i < _peaks.length; i++) {
           _peaks[i] *= 0.88;
         }
+      }
+    });
+    if (!widget.playing) _syncTicker();
+  }
+
+  Future<void> _loadDesktopEnvelope() async {
+    if (!_isDesktop || !widget.enabled) {
+      _desktopEnvelope = null;
+      _desktopEnvelopePath = null;
+      return;
+    }
+    final path = widget.artworkPath;
+    if (path == null || path.isEmpty || path.startsWith('content:')) {
+      _desktopEnvelope = null;
+      _desktopEnvelopePath = null;
+      return;
+    }
+    if (_desktopEnvelopePath == path && _desktopEnvelope != null) return;
+    final gen = ++_envGen;
+    try {
+      final peaks = await compute(envelopePeaksJob, <dynamic, dynamic>{
+        'path': path,
+        'bars': 512,
+      });
+      if (!mounted || gen != _envGen) return;
+      _desktopEnvelope = peaks;
+      _desktopEnvelopePath = path;
+      _live = peaks.isNotEmpty;
+      _capturePaused = false;
+      _syncTicker();
+    } catch (_) {
+      if (!mounted || gen != _envGen) return;
+      _desktopEnvelope = List<double>.filled(64, 0.14);
+      _desktopEnvelopePath = path;
+    }
+  }
+
+  void _driveDesktopHalo() {
+    if (!widget.enabled || !widget.playing || _backgrounded) return;
+    final env = _desktopEnvelope;
+    if (env == null || env.isEmpty) {
+      if (widget.enabled) unawaited(_loadDesktopEnvelope());
+      return;
+    }
+    final now = DateTime.now();
+    if (_lastUiAt != null && now.difference(_lastUiAt!) < const Duration(milliseconds: 40)) {
+      return;
+    }
+    final duration = widget.durationOf?.call() ?? Duration.zero;
+    final ms = duration.inMilliseconds;
+    if (ms < 200) return;
+    final t = (_position.inMilliseconds / ms).clamp(0.0, 1.0);
+    final frame = DesktopHalo.sample(env, t, prevEnergy: _energy);
+    _lastDataAt = now;
+    _lastUiAt = now;
+    _live = true;
+    _capturePaused = false;
+    if (!mounted) return;
+    setState(() {
+      for (var i = 0; i < _peaks.length; i++) {
+        final target = frame.peaks[i % frame.peaks.length];
+        final blend = target > _peaks[i] ? 0.68 : 0.26;
+        _peaks[i] = lerpDouble(_peaks[i], target, blend)!;
+      }
+      _energy = lerpDouble(_energy, frame.energy, frame.energy > _energy ? 0.6 : 0.16)!;
+      _bass = lerpDouble(_bass, frame.bass, frame.bass > _bass ? 0.72 : 0.12)!;
+      if (frame.beat) {
+        _pulse = math.max(_pulse, 0.62 + 0.38 * frame.strength);
+      } else if (frame.strength > _pulse) {
+        _pulse = lerpDouble(_pulse, frame.strength, 0.3)!;
       }
     });
   }
@@ -341,12 +469,11 @@ class _BeatHaloState extends State<BeatHalo>
     final last = _lastDataAt;
     final fresh = last != null && now.difference(last) < const Duration(seconds: 2);
     if (fresh) return;
+    // Soft rebind only. Force-recreating Visualizer mid-playback has caused
+    // abrupt process death on Samsung Exynos (S10) with Equalizer attached.
     _live = false;
     _capturePaused = true;
-    final hard = last == null
-        ? now.difference(_restartAt!) > const Duration(seconds: 3)
-        : now.difference(last) > const Duration(seconds: 4);
-    _scheduleCapture(force: hard);
+    _scheduleCapture();
   }
 
   Future<void> _syncCapture({bool force = false}) async {
@@ -361,10 +488,13 @@ class _BeatHaloState extends State<BeatHalo>
     final allowed = await _ensureMic();
     if (!mounted || gen != _syncGen) return;
     if (!allowed) return;
+    // Never ask native to tear down + recreate an attached Visualizer while
+    // audio is playing. Session-id changes still recreate inside AudioHalo.
+    CrashLog.mark('halo.start', 'session=$id');
     try {
       final ok = await _methods.invokeMethod<bool>('start', {
             'sessionId': id,
-            'force': force,
+            'force': false,
           }) ??
           false;
       if (!mounted || gen != _syncGen) return;
@@ -372,14 +502,12 @@ class _BeatHaloState extends State<BeatHalo>
       if (!ok) {
         _live = false;
         _capturePaused = true;
+        CrashLog.mark('halo.start.fail', 'session=$id');
       } else {
         _capturePaused = false;
-        if (force) {
-          _live = false;
-          _lastDataAt = null;
-        }
       }
-    } catch (_) {
+    } catch (error) {
+      CrashLog.mark('halo.start.error', error);
       _live = false;
       _capturePaused = true;
     }
@@ -398,7 +526,7 @@ class _BeatHaloState extends State<BeatHalo>
   }
 
   void _onData(dynamic raw) {
-    if (!widget.enabled || !widget.playing) return;
+    if (!widget.enabled || !widget.playing || _backgrounded) return;
     if (raw is! Map) return;
     final peaks = raw['peaks'];
     if (peaks is! List || peaks.isEmpty) return;
@@ -413,6 +541,14 @@ class _BeatHaloState extends State<BeatHalo>
     final beat = raw['beat'] == true;
     final strength = ((raw['strength'] as num?)?.toDouble() ?? (beat ? 1.0 : 0)).clamp(0.0, 1.0);
     if (!mounted) return;
+    final now = DateTime.now();
+    // Cap UI updates ~20fps; still absorb beat spikes immediately.
+    if (!beat &&
+        _lastUiAt != null &&
+        now.difference(_lastUiAt!) < const Duration(milliseconds: 48)) {
+      return;
+    }
+    _lastUiAt = now;
     setState(() {
       _live = true;
       for (var i = 0; i < _peaks.length; i++) {
@@ -428,6 +564,7 @@ class _BeatHaloState extends State<BeatHalo>
         _pulse = lerpDouble(_pulse, strength, 0.3)!;
       }
     });
+    _syncTicker();
   }
 
   double _follow(double current, double next, {double up = 0.7, double down = 0.22}) {
@@ -674,14 +811,18 @@ class _HaloPainter extends CustomPainter {
     final hole = _outline(bounds, -1);
     final smooth = _smooth(peaks);
     final outer = _haloRing(bounds, expand, smooth);
-    final band = Path.combine(PathOperation.difference, outer, _outline(bounds, 1.5));
     final wash = _rimAverage(rim, color);
     final sweepRect = bounds.inflate(expand + 18);
 
     canvas.save();
-    canvas.clipPath(
-      Path.combine(PathOperation.difference, Path()..addRect(screen), hole),
-    );
+    try {
+      canvas.clipPath(
+        Path.combine(PathOperation.difference, Path()..addRect(screen), hole),
+      );
+    } catch (_) {
+      canvas.restore();
+      return;
+    }
 
     canvas.drawPath(
       _outline(bounds, expand * 1.05),
@@ -689,14 +830,22 @@ class _HaloPainter extends CustomPainter {
         ..color = wash.withValues(alpha: (playing ? 0.07 : 0.025) + drive * 0.1)
         ..maskFilter = const MaskFilter.blur(BlurStyle.normal, 18),
     );
-    canvas.drawPath(
-      band,
-      _haloPaint(sweepRect, playing ? 0.08 + drive * 0.18 : 0.04, const MaskFilter.blur(BlurStyle.normal, 12)),
-    );
-    canvas.drawPath(
-      band,
-      _haloPaint(sweepRect, playing ? 0.16 + drive * 0.26 : 0.06, const MaskFilter.blur(BlurStyle.normal, 5.5)),
-    );
+    Path? band;
+    try {
+      band = Path.combine(PathOperation.difference, outer, _outline(bounds, 1.5));
+    } catch (_) {
+      band = null;
+    }
+    if (band != null) {
+      canvas.drawPath(
+        band,
+        _haloPaint(sweepRect, playing ? 0.08 + drive * 0.18 : 0.04, const MaskFilter.blur(BlurStyle.normal, 12)),
+      );
+      canvas.drawPath(
+        band,
+        _haloPaint(sweepRect, playing ? 0.16 + drive * 0.26 : 0.06, const MaskFilter.blur(BlurStyle.normal, 5.5)),
+      );
+    }
     canvas.drawPath(
       outer,
       _haloPaint(

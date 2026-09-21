@@ -241,7 +241,7 @@ const catalogEn = <String, String>{
   'beatHaloHint':
       'Pulses with the playing audio. On Android the system may ask for the microphone to read the player spectrum — it is not recording.',
   'beatHaloHintDesktop':
-      'Pulses with the playing audio around the cover while a track is playing.',
+      'Pulses with the playing track around the cover (uses the song’s energy on Windows).',
   'simpleWaves': 'Simple waves',
   'advancedWaves': 'Advanced waves',
   'beatHaloModeHint':

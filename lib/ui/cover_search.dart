@@ -108,7 +108,7 @@ class _CoverSearchScreenState extends State<CoverSearchScreen> {
       if (!mounted) return;
       if (cropped == null || cropped.isEmpty) return;
       setState(() => _applying = true);
-      final cover = await downscaleCover(cropped, maxSide: 900);
+      final cover = await downscaleCover(cropped, maxSide: kCoverMaxSide);
       await ArtworkStore.instance.put(widget.track.path, cover);
       if (!mounted) return;
       final player = contextPlayer(context, listen: false);

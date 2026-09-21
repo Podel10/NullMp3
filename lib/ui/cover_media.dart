@@ -197,7 +197,8 @@ class _AnimatedRasterCover extends StatefulWidget {
   State<_AnimatedRasterCover> createState() => _AnimatedRasterCoverState();
 }
 
-class _AnimatedRasterCoverState extends State<_AnimatedRasterCover> {
+class _AnimatedRasterCoverState extends State<_AnimatedRasterCover>
+    with WidgetsBindingObserver {
   ui.Codec? _codec;
   ui.Image? _image;
   Object? _token;
@@ -205,13 +206,31 @@ class _AnimatedRasterCoverState extends State<_AnimatedRasterCover> {
   Completer<void>? _delayAbort;
   var _failed = false;
   var _index = -1;
+  var _backgrounded = false;
   Duration _hold = const Duration(milliseconds: 33);
 
   @override
   void initState() {
     super.initState();
+    WidgetsBinding.instance.addObserver(this);
     unawaited(_start());
   }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    final hidden = state == AppLifecycleState.paused ||
+        state == AppLifecycleState.hidden ||
+        state == AppLifecycleState.detached;
+    if (_backgrounded == hidden) return;
+    _backgrounded = hidden;
+    if (hidden) {
+      _abortDelay();
+    } else if (widget.playing) {
+      _wake();
+    }
+  }
+
+  bool get _shouldAnimate => widget.playing && !_backgrounded;
 
   @override
   void didUpdateWidget(covariant _AnimatedRasterCover oldWidget) {
@@ -220,7 +239,7 @@ class _AnimatedRasterCoverState extends State<_AnimatedRasterCover> {
       unawaited(_start());
       return;
     }
-    if (widget.playing) {
+    if (_shouldAnimate) {
       _wake();
     } else {
       _abortDelay();
@@ -229,6 +248,7 @@ class _AnimatedRasterCoverState extends State<_AnimatedRasterCover> {
 
   @override
   void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
     _token = null;
     _wake();
     _abortDelay();
@@ -251,7 +271,7 @@ class _AnimatedRasterCoverState extends State<_AnimatedRasterCover> {
   }
 
   Future<void> _waitWhilePaused() async {
-    if (widget.playing) return;
+    if (_shouldAnimate) return;
     final waiter = _resume ??= Completer<void>();
     await waiter.future;
   }
@@ -268,7 +288,7 @@ class _AnimatedRasterCoverState extends State<_AnimatedRasterCover> {
     try {
       final codec = await ui.instantiateImageCodec(
         widget.bytes,
-        targetWidth: (widget.cacheWidth ?? 720).clamp(64, 720),
+        targetWidth: (widget.cacheWidth ?? 1080).clamp(64, 1440),
       );
       if (!mounted || !identical(_token, token)) {
         codec.dispose();
@@ -339,7 +359,7 @@ class _AnimatedRasterCoverState extends State<_AnimatedRasterCover> {
 
   Future<void> _delayWhilePlaying(Duration wait) async {
     if (wait <= Duration.zero) return;
-    if (!widget.playing) return;
+    if (!_shouldAnimate) return;
     final abort = Completer<void>();
     _delayAbort = abort;
     try {
@@ -491,7 +511,7 @@ class _VideoCover extends StatefulWidget {
   State<_VideoCover> createState() => _VideoCoverState();
 }
 
-class _VideoCoverState extends State<_VideoCover> {
+class _VideoCoverState extends State<_VideoCover> with WidgetsBindingObserver {
   final GlobalKey _bound = GlobalKey();
   VideoPlayerController? _player;
   Object? _token;
@@ -500,11 +520,24 @@ class _VideoCoverState extends State<_VideoCover> {
   var _failed = false;
   var _rimBusy = false;
   var _primed = false;
+  var _backgrounded = false;
 
   @override
   void initState() {
     super.initState();
+    WidgetsBinding.instance.addObserver(this);
     unawaited(_open());
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    final hidden = state == AppLifecycleState.paused ||
+        state == AppLifecycleState.hidden ||
+        state == AppLifecycleState.detached;
+    if (_backgrounded == hidden) return;
+    _backgrounded = hidden;
+    unawaited(_syncPlayback());
+    _tuneRimTimer();
   }
 
   @override
@@ -524,6 +557,7 @@ class _VideoCoverState extends State<_VideoCover> {
 
   @override
   void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
     _token = null;
     _rimTimer?.cancel();
     _rimTimer = null;
@@ -565,7 +599,7 @@ class _VideoCoverState extends State<_VideoCover> {
           file,
           videoPlayerOptions: VideoPlayerOptions(
             mixWithOthers: true,
-            allowBackgroundPlayback: true,
+            allowBackgroundPlayback: false,
           ),
         );
         await player.initialize();
@@ -582,7 +616,7 @@ class _VideoCoverState extends State<_VideoCover> {
           Uri.parse(uri),
           videoPlayerOptions: VideoPlayerOptions(
             mixWithOthers: true,
-            allowBackgroundPlayback: true,
+            allowBackgroundPlayback: false,
           ),
         );
         await player.initialize();
@@ -616,7 +650,7 @@ class _VideoCoverState extends State<_VideoCover> {
 
   void _onVideoTick() {
     final player = _player;
-    if (player == null || !widget.playing || !widget.animate) return;
+    if (player == null || !widget.playing || !widget.animate || _backgrounded) return;
     final value = player.value;
     if (value.isPlaying || !value.isInitialized) return;
     if (value.duration <= Duration.zero) return;
@@ -637,12 +671,13 @@ class _VideoCoverState extends State<_VideoCover> {
     final player = _player;
     if (player == null || !player.value.isInitialized) return;
     try {
-      if (widget.animate && widget.playing) {
+      final shouldPlay = widget.animate && widget.playing && !_backgrounded;
+      if (shouldPlay) {
         await player.play();
         _primed = true;
         return;
       }
-      if (!_primed) {
+      if (!_primed && !_backgrounded) {
         await player.play();
         await Future<void>.delayed(const Duration(milliseconds: 80));
         _primed = true;
@@ -654,22 +689,27 @@ class _VideoCoverState extends State<_VideoCover> {
   void _tuneRimTimer() {
     _rimTimer?.cancel();
     _rimTimer = null;
-    if (!widget.liveRim || !widget.animate || !widget.playing) return;
+    if (!widget.liveRim || !widget.animate || !widget.playing || _backgrounded) return;
     final path = widget.artworkPath;
     if (path == null || path.isEmpty) return;
-    _rimTimer = Timer.periodic(const Duration(milliseconds: 220), (_) => unawaited(_pushRim()));
-    unawaited(_pushRim());
+    // Defer live rim until video has painted — concurrent Visualizer + decode
+    // + toImage right at play start is the heavy path on S10.
+    _rimTimer = Timer(const Duration(milliseconds: 900), () {
+      if (!mounted || !widget.liveRim || !widget.playing || _backgrounded) return;
+      _rimTimer = Timer.periodic(const Duration(milliseconds: 900), (_) => unawaited(_pushRim()));
+      unawaited(_pushRim());
+    });
   }
 
   Future<void> _pushRim() async {
-    if (_rimBusy || !mounted || !widget.liveRim || !widget.playing) return;
+    if (_rimBusy || !mounted || !widget.liveRim || !widget.playing || _backgrounded) return;
     final path = widget.artworkPath;
     if (path == null || path.isEmpty) return;
     final box = _bound.currentContext?.findRenderObject() as RenderRepaintBoundary?;
     if (box == null || !box.hasSize || box.size.isEmpty) return;
     _rimBusy = true;
     try {
-      final image = await box.toImage(pixelRatio: 0.12);
+      final image = await box.toImage(pixelRatio: 0.08);
       try {
         final colors = await sampleRimFromImage(image, circle: false);
         if (colors.length >= 2) CoverRimLive.instance.push(path, colors);

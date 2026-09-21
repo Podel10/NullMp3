@@ -1262,28 +1262,44 @@ class MainActivity : FlutterActivity() {
         return ensureFlutterDecodable(pathBytes)
     }
 
-    /** HEIC/unknown stills from Photos need a PNG/JPEG Flutter can decode. */
+    /** Stills Flutter can decode, capped so crop/preview never see 12 MP dumps. */
     private fun ensureFlutterDecodable(bytes: ByteArray): ByteArray {
         if (bytes.size < 12) return bytes
-        if (isGifHeader(bytes) || isWebpHeader(bytes) || isPngHeader(bytes) || isJpegHeader(bytes)) {
+        if (isGifHeader(bytes) || isWebpHeader(bytes) || isVideoHeader(bytes)) {
             return bytes
         }
-        if (isVideoHeader(bytes)) return bytes
+        val jpeg = isJpegHeader(bytes)
+        return downsampleStill(bytes, maxSide = 3200, preferJpeg = jpeg) ?: bytes
+    }
+
+    private fun downsampleStill(
+        bytes: ByteArray,
+        maxSide: Int,
+        preferJpeg: Boolean,
+    ): ByteArray? {
         return try {
             val opts = BitmapFactory.Options().apply { inJustDecodeBounds = true }
             BitmapFactory.decodeByteArray(bytes, 0, bytes.size, opts)
-            if (opts.outWidth <= 0 || opts.outHeight <= 0) return bytes
+            if (opts.outWidth <= 0 || opts.outHeight <= 0) {
+                // Not decodable here (rare HEIC) — leave bytes alone.
+                return bytes
+            }
             var sample = 1
-            val maxSide = 2048
             while (opts.outWidth / sample > maxSide || opts.outHeight / sample > maxSide) {
                 sample *= 2
+            }
+            if (sample == 1 && (preferJpeg || isPngHeader(bytes))) {
+                return bytes
             }
             val decode = BitmapFactory.Options().apply { inSampleSize = sample }
             val bitmap = BitmapFactory.decodeByteArray(bytes, 0, bytes.size, decode) ?: return bytes
             try {
                 val out = ByteArrayOutputStream()
-                val ok = bitmap.compress(Bitmap.CompressFormat.PNG, 100, out)
-                if (!ok) bytes else out.toByteArray()
+                val format =
+                    if (preferJpeg) Bitmap.CompressFormat.JPEG else Bitmap.CompressFormat.PNG
+                val quality = if (preferJpeg) 92 else 100
+                if (!bitmap.compress(format, quality, out)) return bytes
+                out.toByteArray()
             } finally {
                 bitmap.recycle()
             }

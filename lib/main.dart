@@ -4,6 +4,7 @@ import 'package:flutter_localizations/flutter_localizations.dart';
 import 'package:just_audio_media_kit/just_audio_media_kit.dart';
 import 'package:provider/provider.dart';
 
+import 'data/crash_log.dart';
 import 'l10n/app_language.dart';
 import 'state/library.dart';
 import 'state/player.dart';
@@ -16,6 +17,7 @@ import 'ui/wallpaper.dart';
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
+  CrashLog.installHooks();
 
   if (!kIsWeb &&
       (defaultTargetPlatform == TargetPlatform.windows ||

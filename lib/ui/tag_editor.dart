@@ -114,7 +114,7 @@ class _TagEditorSheetState extends State<TagEditorSheet> {
         setState(() => _picking = false);
         return;
       }
-      final cover = await downscaleCover(cropped);
+      final cover = await downscaleCover(cropped, maxSide: kCoverMaxSide);
       if (!mounted) return;
       if (cover.isEmpty) {
         setState(() {
@@ -175,7 +175,7 @@ class _TagEditorSheetState extends State<TagEditorSheet> {
     if (current == null || isAnimatedCover(current) || _picking) return;
     final cropped = await showCoverCrop(context, current);
     if (!mounted || cropped == null || cropped.isEmpty) return;
-    final cover = await downscaleCover(cropped);
+    final cover = await downscaleCover(cropped, maxSide: kCoverMaxSide);
     if (!mounted) return;
     setState(() {
       _cover = Uint8List.fromList(cover);

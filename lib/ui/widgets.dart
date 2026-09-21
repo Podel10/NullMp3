@@ -1,6 +1,6 @@
 import 'dart:async';
-import 'dart:typed_data';
 
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 
@@ -127,10 +127,22 @@ class _CoverArtState extends State<CoverArt> {
               liveRim: widget.liveRim,
               artworkPath: widget.track?.path,
               filterQuality: widget.expand ? FilterQuality.medium : FilterQuality.low,
-              cacheWidth: ((widget.expand ? 420 : widget.size) *
+              // Decode for *display* only — saved art can be larger (kCoverMaxSide).
+              // Cap harder while animating on Android: GIF decode + beat-halo rim
+              // scan used to pile on at play start.
+              cacheWidth: ((widget.expand ? 720 : widget.size) *
                       (MediaQuery.maybeDevicePixelRatioOf(context) ?? 2))
                   .round()
-                  .clamp(48, 720),
+                  .clamp(
+                    48,
+                    widget.expand
+                        ? (widget.animate &&
+                                !kIsWeb &&
+                                defaultTargetPlatform == TargetPlatform.android
+                            ? 960
+                            : 1440)
+                        : 720,
+                  ),
               errorBuilder: (_, _, _) => _Placeholder(seed: seed, iconSize: iconSize, muted: widget.muted),
             ),
     );
@@ -309,9 +321,10 @@ class MiniPlayer extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final player = contextPlayer(context);
-    final track = player.current;
+    final track = context.select<PlayerController, Track?>((p) => p.current);
     if (track == null) return const SizedBox.shrink();
+    final playing = context.select<PlayerController, bool>((p) => p.playing);
+    final artworkColor = context.select<PlayerController, Color?>((p) => p.artworkColor);
     final theme = Theme.of(context);
     final accent = theme.colorScheme.primary;
 
@@ -325,7 +338,7 @@ class MiniPlayer extends StatelessWidget {
             color: Color.lerp(
               theme.scaffoldBackgroundColor,
               AppTheme.ambientFromArtwork(
-                player.artworkColor,
+                artworkColor,
                 dark: theme.brightness == Brightness.dark,
               ),
               0.72,
@@ -337,8 +350,9 @@ class MiniPlayer extends StatelessWidget {
           child: Column(
             children: [
               StreamBuilder<Duration>(
-                stream: player.positionClock,
+                stream: context.read<PlayerController>().positionClock,
                 builder: (context, snapshot) {
+                  final player = context.read<PlayerController>();
                   final pos = snapshot.data ?? Duration.zero;
                   final dur = player.totalDuration;
                   final value = dur.inMilliseconds == 0
@@ -385,7 +399,7 @@ class MiniPlayer extends StatelessWidget {
                       IconButton(
                         onPressed: onPlayPause,
                         icon: Icon(
-                          player.playing ? Icons.pause_rounded : Icons.play_arrow_rounded,
+                          playing ? Icons.pause_rounded : Icons.play_arrow_rounded,
                           size: 30,
                         ),
                       ),

@@ -127,7 +127,7 @@ class _LockPlayerScreenState extends State<LockPlayerScreen> {
                             radius: 8,
                             muted: true,
                             loadArtwork: true,
-                            animate: true,
+                            animate: !_locked,
                           ),
                         ),
                         const SizedBox(height: 28),

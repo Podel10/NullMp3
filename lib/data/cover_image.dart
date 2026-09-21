@@ -51,7 +51,7 @@ Future<String?> openPlaybackFile(String path) async {
   return null;
 }
 
-Future<Uint8List?> grabVideoPoster(String path, {int maxSide = 360}) async {
+Future<Uint8List?> grabVideoPoster(String path, {int maxSide = 720}) async {
   if (kIsWeb || !Platform.isAndroid) return null;
   try {
     final data = await _filesChannel.invokeMethod<dynamic>('videoPoster', {
@@ -208,7 +208,8 @@ Future<Uint8List?> pickCoverBytes() async {
     try {
       final data = _asBytes(await _filesChannel.invokeMethod<dynamic>('pickImage'));
       if (data != null && data.isNotEmpty) {
-        return await downscaleCover(normalizeCoverBytes(Uint8List.fromList(data)));
+        // Native already samples stills to kCoverMaxSide; crop clamps again.
+        return normalizeCoverBytes(Uint8List.fromList(data));
       }
     } catch (_) {}
     // Stay on the native picker path — do not fall through to FilePicker on Android.
@@ -226,52 +227,92 @@ Future<Uint8List?> pickCoverBytes() async {
     if (file == null) return null;
     final bytes = await file.readAsBytes();
     if (bytes.isEmpty) return null;
-    return await downscaleCover(normalizeCoverBytes(Uint8List.fromList(bytes)));
+    // Crop prepares/clamps stills; keep motion files untouched.
+    return normalizeCoverBytes(Uint8List.fromList(bytes));
   } catch (_) {
     return null;
   }
 }
 
-/// Shrinks still album art. GIF / WebP / MP4 stay as-is so motion is kept.
-Future<Uint8List> downscaleCover(Uint8List bytes, {int maxSide = 512}) async {
+/// Soft ceiling for saved still covers. Crop works on pixels already clamped
+/// to this side — never decode a 12 MP camera dump at full size on device.
+const int kCoverMaxSide = 3200;
+
+/// Decode stills into at most [maxSide] on the long edge. Used before crop so
+/// the crop UI / GPU never hold a multi‑thousand‑px texture.
+Future<Uint8List> prepareStillCoverForCrop(Uint8List bytes, {int maxSide = kCoverMaxSide}) async {
   if (isAnimatedCover(bytes)) return bytes;
-  if (bytes.lengthInBytes <= 140 * 1024) return bytes;
   try {
-    final codec = await ui.instantiateImageCodec(bytes);
-    final frame = await codec.getNextFrame();
-    final image = frame.image;
-    final width = image.width;
-    final height = image.height;
-    image.dispose();
-    if (width <= maxSide && height <= maxSide && bytes.lengthInBytes <= 220 * 1024) {
-      return bytes;
-    }
-    final landscape = width >= height;
-    final resized = await ui.instantiateImageCodec(
+    final codec = await ui.instantiateImageCodec(
       bytes,
-      targetWidth: landscape ? maxSide : null,
-      targetHeight: landscape ? null : maxSide,
+      targetWidth: maxSide,
+      targetHeight: maxSide,
     );
-    final next = await resized.getNextFrame();
-    final data = await next.image.toByteData(format: ui.ImageByteFormat.png);
-    next.image.dispose();
-    if (data == null) return bytes;
-    return data.buffer.asUint8List();
+    final frame = await codec.getNextFrame();
+    codec.dispose();
+    final image = frame.image;
+    try {
+      final hitCap = image.width >= maxSide || image.height >= maxSide;
+      if (!hitCap && bytes.lengthInBytes <= 2 * 1024 * 1024) {
+        return bytes;
+      }
+      final data = await image.toByteData(format: ui.ImageByteFormat.png);
+      if (data == null) return bytes;
+      return data.buffer.asUint8List();
+    } finally {
+      image.dispose();
+    }
+  } catch (_) {
+    return bytes;
+  }
+}
+
+/// Shrinks still album art. GIF / WebP / MP4 stay as-is so motion is kept.
+Future<Uint8List> downscaleCover(Uint8List bytes, {int maxSide = kCoverMaxSide}) async {
+  if (isAnimatedCover(bytes)) return bytes;
+  // Keep modest files as-is; only touch huge camera / desktop dumps.
+  if (bytes.lengthInBytes <= 900 * 1024) return bytes;
+  try {
+    // Never full-decode first — bound the long edge up front.
+    final codec = await ui.instantiateImageCodec(
+      bytes,
+      targetWidth: maxSide,
+      targetHeight: maxSide,
+    );
+    final frame = await codec.getNextFrame();
+    codec.dispose();
+    final image = frame.image;
+    try {
+      final hitCap = image.width >= maxSide || image.height >= maxSide;
+      if (!hitCap && bytes.lengthInBytes <= 2 * 1024 * 1024) {
+        return bytes;
+      }
+      final data = await image.toByteData(format: ui.ImageByteFormat.png);
+      if (data == null) return bytes;
+      return data.buffer.asUint8List();
+    } finally {
+      image.dispose();
+    }
   } catch (_) {
     return bytes;
   }
 }
 
 /// Still JPEG/PNG for ID3. GIF/WebP/video become the first frame so the MP3 stays playable.
-Future<Uint8List?> flattenCoverForEmbed(Uint8List bytes, {int maxSide = 512}) async {
+Future<Uint8List?> flattenCoverForEmbed(Uint8List bytes, {int maxSide = kCoverMaxSide}) async {
   try {
     final still = !isAnimatedCover(bytes);
     final mime = mimeOfImage(bytes);
-    if (still && (mime == 'image/jpeg' || mime == 'image/png') && bytes.lengthInBytes <= 280 * 1024) {
+    if (still && (mime == 'image/jpeg' || mime == 'image/png') && bytes.lengthInBytes <= 2 * 1024 * 1024) {
       return bytes;
     }
-    final codec = await ui.instantiateImageCodec(bytes, targetWidth: maxSide);
+    final codec = await ui.instantiateImageCodec(
+      bytes,
+      targetWidth: maxSide,
+      targetHeight: maxSide,
+    );
     final frame = await codec.getNextFrame();
+    codec.dispose();
     final image = frame.image;
     final data = await image.toByteData(format: ui.ImageByteFormat.png);
     image.dispose();
@@ -295,17 +336,50 @@ class CoverCropSource {
 Future<CoverCropSource?> inspectCoverForCrop(Uint8List bytes) async {
   if (isAnimatedCover(bytes)) return null;
   try {
-    final codec = await ui.instantiateImageCodec(bytes);
+    final codec = await ui.instantiateImageCodec(
+      bytes,
+      targetWidth: kCoverMaxSide,
+      targetHeight: kCoverMaxSide,
+    );
     final frame = await codec.getNextFrame();
+    codec.dispose();
     final image = frame.image;
     try {
       final size = Size(image.width.toDouble(), image.height.toDouble());
       if (size.width < 8 || size.height < 8) return null;
       var bounds = Offset.zero & size;
-      if (image.width * image.height <= 4 * 1024 * 1024) {
+      // Letterbox scan on a further-downscaled copy — full RGBA at 3200² is ~40 MB.
+      if (image.width * image.height <= 2 * 1024 * 1024) {
         final pixels = await image.toByteData(format: ui.ImageByteFormat.rawRgba);
         if (pixels != null) {
           bounds = _letterboxBounds(pixels.buffer.asUint8List(), image.width, image.height) ?? bounds;
+        }
+      } else {
+        final probeCodec = await ui.instantiateImageCodec(
+          bytes,
+          targetWidth: 1024,
+          targetHeight: 1024,
+        );
+        final probeFrame = await probeCodec.getNextFrame();
+        probeCodec.dispose();
+        final probe = probeFrame.image;
+        try {
+          final pixels = await probe.toByteData(format: ui.ImageByteFormat.rawRgba);
+          if (pixels != null) {
+            final pb = _letterboxBounds(pixels.buffer.asUint8List(), probe.width, probe.height);
+            if (pb != null) {
+              final sx = size.width / probe.width;
+              final sy = size.height / probe.height;
+              bounds = Rect.fromLTRB(
+                pb.left * sx,
+                pb.top * sy,
+                pb.right * sx,
+                pb.bottom * sy,
+              );
+            }
+          }
+        } finally {
+          probe.dispose();
         }
       }
       return CoverCropSource(size: size, suggested: _largestSquare(bounds, size));
@@ -375,8 +449,13 @@ Rect? _letterboxBounds(Uint8List rgba, int width, int height) {
 Future<Uint8List?> cropCoverSquare(Uint8List bytes, Rect source) async {
   if (isAnimatedCover(bytes)) return bytes;
   try {
-    final codec = await ui.instantiateImageCodec(bytes);
+    final codec = await ui.instantiateImageCodec(
+      bytes,
+      targetWidth: kCoverMaxSide,
+      targetHeight: kCoverMaxSide,
+    );
     final frame = await codec.getNextFrame();
+    codec.dispose();
     final image = frame.image;
     try {
       final width = image.width.toDouble();
@@ -387,7 +466,8 @@ Future<Uint8List?> cropCoverSquare(Uint8List bytes, Rect source) async {
       side = math.max(side, math.min(32.0, maxSide));
       final left = source.left.clamp(0.0, width - side).toDouble();
       final top = source.top.clamp(0.0, height - side).toDouble();
-      final outSide = math.min(900, math.max(side.round(), 64));
+      // Prefer the crop’s native size; only clamp absurd camera dumps.
+      final outSide = math.min(kCoverMaxSide, math.max(side.round(), 64));
       final recorder = ui.PictureRecorder();
       final canvas = Canvas(recorder);
       canvas.drawImageRect(

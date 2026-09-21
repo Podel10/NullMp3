@@ -63,6 +63,8 @@ class NowPlayingScreen extends StatelessWidget {
             artworkPath: track.path,
             sessionId: player.player.androidAudioSessionId,
             sessionIds: player.player.androidAudioSessionIdStream,
+            positionStream: player.positionClock,
+            durationOf: () => player.totalDuration,
             child: Column(
             children: [
               Padding(
@@ -322,7 +324,7 @@ class _NowPlayingCoverState extends State<_NowPlayingCover> {
   }
 }
 
-class _ArtworkAtmosphere extends StatelessWidget {
+class _ArtworkAtmosphere extends StatefulWidget {
   const _ArtworkAtmosphere({
     required this.track,
     required this.tint,
@@ -336,36 +338,60 @@ class _ArtworkAtmosphere extends StatelessWidget {
   final bool enabled;
 
   @override
+  State<_ArtworkAtmosphere> createState() => _ArtworkAtmosphereState();
+}
+
+class _ArtworkAtmosphereState extends State<_ArtworkAtmosphere> {
+  Future<Uint8List?>? _bytesFuture;
+  String? _path;
+
+  @override
+  void initState() {
+    super.initState();
+    _path = widget.track.path;
+    _bytesFuture = ArtworkStore.instance.get(_path!);
+  }
+
+  @override
+  void didUpdateWidget(covariant _ArtworkAtmosphere oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.track.path != widget.track.path) {
+      _path = widget.track.path;
+      _bytesFuture = ArtworkStore.instance.get(_path!);
+    }
+  }
+
+  @override
   Widget build(BuildContext context) {
-    if (!enabled) return child;
+    if (!widget.enabled) return widget.child;
     return FutureBuilder<Uint8List?>(
-      future: ArtworkStore.instance.get(track.path),
+      future: _bytesFuture,
       builder: (context, snapshot) {
         final bytes = snapshot.data;
         return Stack(
           fit: StackFit.expand,
           clipBehavior: Clip.none,
           children: [
-            ColoredBox(color: tint),
+            ColoredBox(color: widget.tint),
             if (bytes != null && bytes.isNotEmpty && !isVideoBytes(bytes) && !isAnimatedCover(bytes))
               Opacity(
-                opacity: 0.42,
+                opacity: 0.36,
                 child: ImageFiltered(
-                  imageFilter: ImageFilter.blur(sigmaX: 58, sigmaY: 58, tileMode: TileMode.decal),
+                  imageFilter: ImageFilter.blur(sigmaX: 16, sigmaY: 16, tileMode: TileMode.decal),
                   child: Transform.scale(
-                    scale: 1.4,
+                    scale: 1.25,
                     child: Image.memory(
                       bytes,
                       fit: BoxFit.cover,
-                      cacheWidth: 72,
+                      cacheWidth: 48,
                       gaplessPlayback: true,
                       filterQuality: FilterQuality.low,
                     ),
                   ),
                 ),
               ),
-            ColoredBox(color: tint.withValues(alpha: 0.58)),
-            child,
+            ColoredBox(color: widget.tint.withValues(alpha: 0.58)),
+            widget.child,
           ],
         );
       },

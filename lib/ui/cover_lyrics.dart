@@ -108,14 +108,16 @@ class _CoverSyncedLyrics extends StatelessWidget {
         // One size for all rows so the active line never jumps when focus moves.
         final size = _coverLyricSize(constraints.maxWidth, base: 0.058, min: 17, max: 30);
         final slotH = size * 1.3 * 2 + 6;
-        return StreamBuilder<Duration>(
-          stream: player.positionClock,
-          builder: (context, snapshot) {
-            final pos = snapshot.data ?? Duration.zero;
+        return StreamBuilder<int>(
+          stream: player.positionClock.map((pos) {
             var active = 0;
             for (var i = 0; i < lyrics.lines.length; i++) {
               if (lyrics.lines[i].time <= pos) active = i;
             }
+            return active;
+          }).distinct(),
+          builder: (context, snapshot) {
+            final active = snapshot.data ?? 0;
             final prev = active > 0 ? lyrics.lines[active - 1].text : '';
             final current = lyrics.lines[active].text;
             final next =

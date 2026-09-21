@@ -42,6 +42,17 @@ object AudioHalo : EventChannel.StreamHandler {
                 if (rebound) return true
             }
             if (force) {
+                // Prefer rebind; hard recreate is a last resort for a wedged capture.
+                val current = visualizer
+                if (current != null) {
+                    val rebound = try {
+                        bindCaptureLocked(current)
+                    } catch (_: Exception) {
+                        false
+                    }
+                    if (rebound) return true
+                }
+                Log.w(TAG, "halo force recreate session=$id")
                 stopCaptureLocked()
             } else if (visualizer != null && sessionId == id) {
                 return false
@@ -84,7 +95,7 @@ object AudioHalo : EventChannel.StreamHandler {
             sessionId = id
             resetEnvelope()
             bindCaptureLocked(vis)
-        } catch (error: Exception) {
+        } catch (error: Throwable) {
             Log.w(TAG, "halo visualizer failed session=$id", error)
             stopCaptureLocked()
             false
@@ -252,7 +263,7 @@ object AudioHalo : EventChannel.StreamHandler {
     }
 
     private fun bindCaptureLocked(vis: Visualizer): Boolean {
-        val rate = max(Visualizer.getMaxCaptureRate() / 2, 20000)
+        val rate = max(Visualizer.getMaxCaptureRate() / 4, 10000)
         // Re-enable FFT in place. pause() leaves the effect attached; clearing
         // the listener while enabled kills capture on several OEMs.
         return try {

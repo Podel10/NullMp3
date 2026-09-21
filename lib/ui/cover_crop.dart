@@ -6,10 +6,13 @@ import 'package:flutter/material.dart';
 import '../data/cover_image.dart';
 import '../l10n/strings.dart';
 
-Future<Uint8List?> showCoverCrop(BuildContext context, Uint8List bytes) {
-  if (isAnimatedCover(bytes)) return Future.value(bytes);
+Future<Uint8List?> showCoverCrop(BuildContext context, Uint8List bytes) async {
+  if (isAnimatedCover(bytes)) return bytes;
+  // Clamp pixels before the route builds — full-res Image.memory OOMs phones.
+  final prepared = await prepareStillCoverForCrop(bytes);
+  if (!context.mounted) return null;
   return Navigator.of(context).push<Uint8List>(
-    MaterialPageRoute(builder: (_) => CoverCropScreen(bytes: bytes)),
+    MaterialPageRoute(builder: (_) => CoverCropScreen(bytes: prepared)),
   );
 }
 
@@ -297,6 +300,12 @@ class _CoverCropStageState extends State<_CoverCropStage> {
                   key: ValueKey<int>(identityHashCode(widget.bytes)),
                   fit: BoxFit.fill,
                   gaplessPlayback: true,
+                  filterQuality: FilterQuality.low,
+                  // Display only — source may still be up to kCoverMaxSide.
+                  cacheWidth: (fitted.width *
+                          (MediaQuery.maybeDevicePixelRatioOf(context) ?? 2))
+                      .round()
+                      .clamp(64, 1440),
                 ),
               ),
               CustomPaint(

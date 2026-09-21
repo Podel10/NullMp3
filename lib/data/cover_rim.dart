@@ -106,7 +106,9 @@ Future<CoverRimSequence> sampleCoverRimSequence(
   try {
     final codec = await ui.instantiateImageCodec(bytes, targetWidth: 64);
     final count = math.max(1, codec.frameCount);
-    final limit = math.min(count, 160);
+    // Cap aggressively — full GIF scan while the cover is also animating has
+    // spiked memory enough to kill the process on mid-range phones.
+    final limit = math.min(count, 48);
     final frames = <CoverRimFrame>[];
     for (var i = 0; i < limit; i++) {
       final frame = await codec.getNextFrame();

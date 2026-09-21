@@ -14,6 +14,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 import '../data/artwork.dart';
 import '../data/audio_edit.dart';
 import '../data/cover_image.dart';
+import '../data/crash_log.dart';
 import '../data/playback_file.dart';
 import '../models/models.dart';
 import 'library.dart';
@@ -121,9 +122,70 @@ class PlayerController extends ChangeNotifier with WidgetsBindingObserver {
   int _nativeDurationMs = 0;
   Timer? _nativeTimer;
   final _nativeClock = StreamController<Duration>.broadcast();
+  StreamController<Duration>? _uiClock;
+  StreamSubscription<Duration>? _uiClockSub;
+  DateTime? _uiClockLastEmit;
+  Duration? _uiClockPending;
+  Timer? _uiClockFlush;
 
-  Stream<Duration> get positionClock =>
-      _useNative ? _nativeClock.stream : player.positionStream;
+  /// UI progress/lyrics clock — throttled so mini player / seek bars do not
+  /// rebuild at the raw just_audio tick rate while audio plays.
+  Stream<Duration> get positionClock {
+    final out = _uiClock ??= StreamController<Duration>.broadcast(
+      onListen: _attachUiClock,
+      onCancel: () {
+        if (_uiClock?.hasListener != true) _detachUiClock();
+      },
+    );
+    return out.stream;
+  }
+
+  void _attachUiClock() {
+    if (_uiClockSub != null) return;
+    final raw = _useNative ? _nativeClock.stream : player.positionStream;
+    _uiClockSub = raw.listen(_onUiClockTick);
+  }
+
+  void _detachUiClock() {
+    _uiClockSub?.cancel();
+    _uiClockSub = null;
+    _uiClockFlush?.cancel();
+    _uiClockFlush = null;
+    _uiClockPending = null;
+    _uiClockLastEmit = null;
+  }
+
+  void _onUiClockTick(Duration position) {
+    final out = _uiClock;
+    if (out == null || out.isClosed || !out.hasListener) return;
+    final now = DateTime.now();
+    final last = _uiClockLastEmit;
+    if (last == null || now.difference(last) >= const Duration(milliseconds: 250)) {
+      _uiClockFlush?.cancel();
+      _uiClockFlush = null;
+      _uiClockPending = null;
+      _uiClockLastEmit = now;
+      out.add(position);
+      return;
+    }
+    _uiClockPending = position;
+    final wait = const Duration(milliseconds: 250) - now.difference(last);
+    _uiClockFlush ??= Timer(wait.isNegative ? Duration.zero : wait, () {
+      _uiClockFlush = null;
+      final pending = _uiClockPending;
+      _uiClockPending = null;
+      if (pending == null || out.isClosed || !out.hasListener) return;
+      _uiClockLastEmit = DateTime.now();
+      out.add(pending);
+    });
+  }
+
+  /// Switch UI clock source when native ↔ just_audio playback changes.
+  void _rebindingUiClock() {
+    if (_uiClock?.hasListener != true) return;
+    _detachUiClock();
+    _attachUiClock();
+  }
 
   Duration get totalDuration {
     if (_nativeDurationMs > 200) {
@@ -359,6 +421,7 @@ class PlayerController extends ChangeNotifier with WidgetsBindingObserver {
       final map = result.map((key, value) => MapEntry(key.toString(), value));
       if (map['ok'] != true) return false;
       _useNative = true;
+      _rebindingUiClock();
       _nativeDurationMs = (map['durationMs'] as num?)?.toInt() ?? 0;
       _lastPosition = Duration.zero;
       playing = true;
@@ -368,13 +431,14 @@ class PlayerController extends ChangeNotifier with WidgetsBindingObserver {
       return true;
     } catch (_) {
       _useNative = false;
+      _rebindingUiClock();
       return false;
     }
   }
 
   void _startNativeClock() {
     _nativeTimer?.cancel();
-    _nativeTimer = Timer.periodic(const Duration(milliseconds: 250), (_) {
+    _nativeTimer = Timer.periodic(const Duration(milliseconds: 400), (_) {
       unawaited(_pollNative());
     });
   }
@@ -432,6 +496,7 @@ class PlayerController extends ChangeNotifier with WidgetsBindingObserver {
     _nativeTimer?.cancel();
     _nativeTimer = null;
     _useNative = false;
+    _rebindingUiClock();
     _nativeDurationMs = 0;
     try {
       await _files.invokeMethod<void>('nativeStop').timeout(
@@ -878,6 +943,7 @@ class PlayerController extends ChangeNotifier with WidgetsBindingObserver {
   Future<void> _loadCurrent({required bool play, Duration position = Duration.zero}) async {
     final track = current;
     if (track == null) return;
+    CrashLog.mark('play.load', '${play ? 'play' : 'load'} ${track.path}');
     _flushListenClock();
     final gen = ++_loadGen;
     _loading = true;
@@ -1231,6 +1297,9 @@ class PlayerController extends ChangeNotifier with WidgetsBindingObserver {
     _sleepTimer?.cancel();
     unawaited(_interruptSub?.cancel());
     _nativeTimer?.cancel();
+    _detachUiClock();
+    unawaited(_uiClock?.close());
+    _uiClock = null;
     unawaited(_nativeStop());
     unawaited(_nativeClock.close());
     player.dispose();
