@@ -50,7 +50,7 @@ powershell -ExecutionPolicy Bypass -File tool\windows\build_installer.ps1
 
 That produces `dist\windows\NullMP3-Setup.exe` — **one file** to send users.
 
-It installs Visual C++ if needed, installs Null MP3, and can launch the app. Covers and library stay in `%AppData%\Roaming\com.nullmp3\Null MP3\` and survive updates.
+It installs Visual C++ if needed, installs Null MP3, and can launch the app. Themes, customization, covers, and wallpaper stay in `%AppData%\Roaming\NullMP3\` (Windows) / app private storage (Android) and survive updates.
 
 ## Support the project
 

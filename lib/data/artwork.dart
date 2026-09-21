@@ -6,8 +6,10 @@ import 'package:flutter/foundation.dart';
 import 'package:path/path.dart' as p;
 import 'package:path_provider/path_provider.dart';
 
+import 'app_storage.dart';
 import 'cover_image.dart';
 import 'scanner.dart';
+import 'stable_hash.dart';
 import 'tag_write.dart';
 
 const _artworkExts = ['gif', 'webp', 'mp4', 'webm', 'bin'];
@@ -52,14 +54,23 @@ class ArtworkStore extends ChangeNotifier {
   final _waiters = <Completer<void>>[];
 
   Future<void> init() async {
-    final support = await getApplicationSupportDirectory();
-    _cacheDir = Directory(p.join(support.path, 'artwork'));
-    if (!await _cacheDir!.exists()) {
-      await _cacheDir!.create(recursive: true);
-    }
+    _cacheDir = await AppStorage.subdir('artwork');
   }
 
-  String _key(String trackPath) => canonicalTrackPath(trackPath).hashCode.toRadixString(16);
+  /// Stable key — survives Flutter/Dart upgrades (hashCode does not).
+  String _key(String trackPath) => stablePathKey(canonicalTrackPath(trackPath));
+
+  /// Older builds keyed by Object.hashCode (and sometimes raw path).
+  List<String> _legacyKeys(String trackPath) {
+    final canonical = canonicalTrackPath(trackPath);
+    final keys = <String>{
+      legacyPathKey(canonical),
+      legacyPathKey(trackPath),
+      stablePathKey(trackPath),
+    };
+    keys.remove(_key(trackPath));
+    return keys.toList();
+  }
 
   File _file(String key, String ext) => File(p.join(_cacheDir?.path ?? '', '$key.$ext'));
 
@@ -78,6 +89,35 @@ class ArtworkStore extends ChangeNotifier {
     for (final ext in _artworkExts) {
       final file = _file(key, ext);
       if (await file.exists()) return file;
+    }
+    return null;
+  }
+
+  /// Prefer the stable key; if only a legacy-named file exists, copy it forward.
+  Future<File?> _resolveCachedFile(String trackPath) async {
+    final key = _key(trackPath);
+    final hit = await _existingFile(key);
+    if (hit != null) return hit;
+    for (final legacy in _legacyKeys(trackPath)) {
+      final old = await _existingFile(legacy);
+      if (old == null) continue;
+      try {
+        final ext = p.extension(old.path).replaceFirst('.', '');
+        final dest = _file(key, ext.isEmpty ? 'bin' : ext);
+        if (!await dest.exists()) {
+          await old.copy(dest.path);
+        }
+        final poster = _posterFile(legacy);
+        if (await poster.exists()) {
+          final destPoster = _posterFile(key);
+          if (!await destPoster.exists()) {
+            await poster.copy(destPoster.path);
+          }
+        }
+        return dest;
+      } catch (_) {
+        return old;
+      }
     }
     return null;
   }
@@ -117,19 +157,21 @@ class ArtworkStore extends ChangeNotifier {
         }
       } catch (_) {}
     }
-    final key = _key(trackPath);
-    for (final ext in const ['mp4', 'webm', 'bin']) {
-      final file = _file(key, ext);
-      try {
-        if (!await file.exists()) continue;
-        final length = await file.length();
-        if (length < 32) continue;
-        if (ext == 'bin') {
-          final header = await _readPrefix(file, 32);
-          if (header == null || !isVideoBytes(header)) continue;
-        }
-        return file;
-      } catch (_) {}
+    final resolved = await _resolveCachedFile(trackPath);
+    if (resolved != null) {
+      final lower = resolved.path.toLowerCase();
+      for (final ext in const ['mp4', 'webm', 'bin']) {
+        if (!lower.endsWith('.$ext')) continue;
+        try {
+          final length = await resolved.length();
+          if (length < 32) break;
+          if (ext == 'bin') {
+            final header = await _readPrefix(resolved, 32);
+            if (header == null || !isVideoBytes(header)) break;
+          }
+          return resolved;
+        } catch (_) {}
+      }
     }
     return null;
   }
@@ -179,6 +221,7 @@ class ArtworkStore extends ChangeNotifier {
 
   Future<Uint8List?> _loadPoster(String trackPath) async {
     final key = _key(trackPath);
+    await _resolveCachedFile(trackPath);
     final file = _posterFile(key);
     try {
       if (await file.exists()) {
@@ -222,7 +265,7 @@ class ArtworkStore extends ChangeNotifier {
         }
       } catch (_) {}
     }
-    final cached = await _existingFile(key);
+    final cached = await _resolveCachedFile(trackPath);
     if (cached != null) {
       try {
         if (_isVideoPath(cached.path)) {
@@ -397,8 +440,10 @@ class ArtworkStore extends ChangeNotifier {
     _memory.remove(trackPath);
     _posters.remove(trackPath);
     _generation[trackPath] = generationOf(trackPath) + 1;
-    final key = _key(trackPath);
-    await _deleteSiblings(key, '');
-    await _deletePoster(key);
+    final keys = [_key(trackPath), ..._legacyKeys(trackPath)];
+    for (final key in keys) {
+      await _deleteSiblings(key, '');
+      await _deletePoster(key);
+    }
   }
 }

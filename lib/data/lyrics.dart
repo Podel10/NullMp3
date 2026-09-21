@@ -4,10 +4,11 @@ import 'dart:io';
 
 import 'package:audio_metadata_reader/audio_metadata_reader.dart';
 import 'package:path/path.dart' as p;
-import 'package:path_provider/path_provider.dart';
 
 import '../models/models.dart';
+import 'app_storage.dart';
 import 'network.dart';
+import 'stable_hash.dart';
 
 const _kLrcTime = r'\[\d{1,2}:\d{2}';
 const _kLrclibAgent = 'NullMP3/1.0 (https://lrclib.net)';
@@ -98,24 +99,14 @@ Directory? _lyricsDir;
 
 Future<Directory> _dir() async {
   if (_lyricsDir != null) return _lyricsDir!;
-  final support = await getApplicationSupportDirectory();
-  final dir = Directory(p.join(support.path, 'lyrics'));
-  if (!await dir.exists()) await dir.create(recursive: true);
+  final dir = await AppStorage.subdir('lyrics');
   _lyricsDir = dir;
   return dir;
 }
 
-String _key(String path) {
-  final bytes = utf8.encode(path);
-  var hash = 2166136261;
-  for (final byte in bytes) {
-    hash ^= byte;
-    hash = (hash * 16777619) & 0xFFFFFFFF;
-  }
-  return hash.toRadixString(16);
-}
+String _key(String path) => stablePathKey(path);
 
-String _legacyKey(String path) => path.hashCode.toRadixString(16);
+String _legacyKey(String path) => legacyPathKey(path);
 
 Future<File> _overrideFile(String path) async =>
     File(p.join((await _dir()).path, '${_key(path)}.txt'));

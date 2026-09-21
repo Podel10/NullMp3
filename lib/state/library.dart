@@ -5,9 +5,9 @@ import 'dart:math' as math;
 
 import 'package:flutter/foundation.dart';
 import 'package:path/path.dart' as p;
-import 'package:path_provider/path_provider.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
+import '../data/app_storage.dart';
 import '../data/audio_edit.dart';
 import '../data/file_actions.dart';
 import '../data/media_index.dart';
@@ -116,7 +116,7 @@ class LibraryController extends ChangeNotifier {
   }
 
   Future<File> _cacheFile() async {
-    final dir = await getApplicationSupportDirectory();
+    final dir = await AppStorage.root();
     return File(p.join(dir.path, 'library_cache_v3.json'));
   }
 

@@ -7,10 +7,10 @@ import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:path/path.dart' as p;
-import 'package:path_provider/path_provider.dart';
 import 'package:permission_handler/permission_handler.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
+import '../data/app_storage.dart';
 import '../data/network.dart';
 import '../data/scanner.dart';
 import '../l10n/strings.dart';
@@ -136,7 +136,9 @@ class SettingsController extends ChangeNotifier {
   Future<void> load() async {
     if (_loaded) return;
     _loaded = true;
+    await AppStorage.root();
     _prefs = await SharedPreferences.getInstance();
+    await _restoreMissingFromDurable();
     final storedTheme = _prefs.getString(_kThemeId);
     if (storedTheme != null) {
       themeId = AppThemeId.values.firstWhere(
@@ -158,6 +160,7 @@ class SettingsController extends ChangeNotifier {
     useCustomAccent = _prefs.getBool(_kUseCustomAccent) ?? false;
     wallpaperPath = _prefs.getString(_kWallpaper);
     wallpaperBlur = _prefs.getDouble(_kWallpaperBlur) ?? 0.45;
+    await _ensureWallpaperResolved();
     uiScale = (_prefs.getDouble(_kUiScale) ?? 1.0).clamp(minUiScale, maxUiScale);
     minDurationSec = _prefs.getInt(_kMinDuration) ?? 0;
     extraFiles = List<String>.from(jsonDecode(_prefs.getString(_kExtraFiles) ?? '[]'));
@@ -207,13 +210,153 @@ class SettingsController extends ChangeNotifier {
         eqBands = [...eqBands, ...List<double>.filled(5 - eqBands.length, 0)];
       }
     }
+    await _persistDurable();
     notifyListeners();
+  }
+
+  /// Fill empty SharedPreferences from durable JSON / older Windows prefs folders.
+  Future<void> _restoreMissingFromDurable() async {
+    try {
+      final sources = <Map<String, Object>>[];
+      final file = await AppStorage.settingsFile();
+      if (await file.exists()) {
+        final raw = jsonDecode(await file.readAsString());
+        if (raw is Map) {
+          sources.add({
+            for (final e in raw.entries)
+              if (e.key is String && e.value != null) e.key as String: e.value as Object,
+          });
+        }
+      }
+      sources.add(await AppStorage.readLegacyPrefs());
+
+      Future<void> putString(String key, Object? value) async {
+        if (_prefs.containsKey(key) || value == null) return;
+        if (value is String) await _prefs.setString(key, value);
+      }
+
+      Future<void> putInt(String key, Object? value) async {
+        if (_prefs.containsKey(key) || value == null) return;
+        if (value is int) {
+          await _prefs.setInt(key, value);
+        } else if (value is num) {
+          await _prefs.setInt(key, value.toInt());
+        }
+      }
+
+      Future<void> putDouble(String key, Object? value) async {
+        if (_prefs.containsKey(key) || value == null) return;
+        if (value is double) {
+          await _prefs.setDouble(key, value);
+        } else if (value is num) {
+          await _prefs.setDouble(key, value.toDouble());
+        }
+      }
+
+      Future<void> putBool(String key, Object? value) async {
+        if (_prefs.containsKey(key) || value == null) return;
+        if (value is bool) await _prefs.setBool(key, value);
+      }
+
+      Object? lookup(String key) {
+        for (final map in sources) {
+          if (map.containsKey(key)) return map[key];
+        }
+        return null;
+      }
+
+      await putString(_kThemeId, lookup(_kThemeId) ?? lookup('themeId'));
+      await putInt(_kTheme, lookup(_kTheme) ?? lookup('themeMode'));
+      await putInt(_kAccent, lookup(_kAccent) ?? lookup('accentIndex'));
+      await putInt(_kCustomBg, lookup(_kCustomBg) ?? lookup('customBackground'));
+      await putInt(_kCustomAccent, lookup(_kCustomAccent) ?? lookup('customAccent'));
+      await putBool(_kUseCustomAccent, lookup(_kUseCustomAccent) ?? lookup('useCustomAccent'));
+      await putString(_kWallpaper, lookup(_kWallpaper) ?? lookup('wallpaper'));
+      await putDouble(_kWallpaperBlur, lookup(_kWallpaperBlur) ?? lookup('wallpaperBlur'));
+      await putDouble(_kUiScale, lookup(_kUiScale) ?? lookup('uiScale'));
+      await putBool(_kInteractiveCover, lookup(_kInteractiveCover) ?? lookup('interactiveCover'));
+      await putString(
+        _kInteractiveCoverMode,
+        lookup(_kInteractiveCoverMode) ?? lookup('interactiveCoverMode'),
+      );
+      await putBool(_kShowLyricsOnCover, lookup(_kShowLyricsOnCover) ?? lookup('showLyricsOnCover'));
+      await putBool(_kBeatHalo, lookup(_kBeatHalo) ?? lookup('beatHalo'));
+      await putString(_kBeatHaloMode, lookup(_kBeatHaloMode) ?? lookup('beatHaloMode'));
+      await putString(_kLanguage, lookup(_kLanguage) ?? lookup('language'));
+      await putInt(_kMinDuration, lookup(_kMinDuration) ?? lookup('minDurationSec'));
+      await putBool(_kOffline, lookup(_kOffline) ?? lookup('offlineMode'));
+      await putBool(_kEqOn, lookup(_kEqOn) ?? lookup('eqEnabled'));
+      await putString(_kEqPreset, lookup(_kEqPreset) ?? lookup('eqPreset'));
+      final eq = lookup(_kEq) ?? lookup('eqBands');
+      if (!_prefs.containsKey(_kEq) && eq != null) {
+        if (eq is String) {
+          await _prefs.setString(_kEq, eq);
+        } else if (eq is List) {
+          await _prefs.setString(_kEq, jsonEncode(eq));
+        }
+      }
+      await putDouble(_kVolume, lookup(_kVolume) ?? lookup('volume'));
+      await putDouble(_kSpeed, lookup(_kSpeed) ?? lookup('playbackSpeed') ?? lookup('speed'));
+      await putDouble(_kPitch, lookup(_kPitch) ?? lookup('playbackPitch') ?? lookup('pitch'));
+      await putBool(_kPauseFade, lookup(_kPauseFade) ?? lookup('pauseFade'));
+      await putBool(_kCrossfade, lookup(_kCrossfade) ?? lookup('crossfade'));
+      await putBool(_kContinuous, lookup(_kContinuous) ?? lookup('continuous'));
+      await putBool(_kStatsEnabled, lookup(_kStatsEnabled) ?? lookup('statsEnabled'));
+      final folders = lookup(_kLibraryFolders) ?? lookup('libraryFolders');
+      if (!_prefs.containsKey(_kLibraryFolders) && folders != null) {
+        if (folders is String) {
+          await _prefs.setString(_kLibraryFolders, folders);
+        } else if (folders is List) {
+          await _prefs.setString(_kLibraryFolders, jsonEncode(folders));
+        }
+      }
+    } catch (_) {}
+  }
+
+  Future<void> _persistDurable() async {
+    try {
+      final wallpaperName = wallpaperPath == null ? null : p.basename(wallpaperPath!);
+      final payload = <String, Object?>{
+        _kThemeId: themeId.name,
+        _kTheme: themeMode.index,
+        _kAccent: accentIndex,
+        _kCustomBg: customBackground.toARGB32(),
+        _kCustomAccent: customAccent.toARGB32(),
+        _kUseCustomAccent: useCustomAccent,
+        _kWallpaper: wallpaperName,
+        _kWallpaperBlur: wallpaperBlur,
+        _kUiScale: uiScale,
+        _kInteractiveCover: interactiveCover,
+        _kInteractiveCoverMode: interactiveCoverMode.name,
+        _kShowLyricsOnCover: showLyricsOnCover,
+        _kBeatHalo: beatHalo,
+        _kBeatHaloMode: beatHaloMode.name,
+        _kLanguage: language.code,
+        _kMinDuration: minDurationSec,
+        _kOffline: offlineMode,
+        _kEqOn: eqEnabled,
+        _kEqPreset: eqPreset,
+        _kEq: eqBands,
+        _kVolume: volume,
+        _kSpeed: speed,
+        _kPitch: pitch,
+        _kPauseFade: pauseFade,
+        _kCrossfade: crossfade,
+        _kContinuous: continuous,
+        _kStatsEnabled: statsEnabled,
+        _kLibraryFolders: libraryFolders,
+        'wallpaper': wallpaperName,
+      };
+      final file = await AppStorage.settingsFile();
+      await file.writeAsString(jsonEncode(payload), flush: true);
+    } catch (_) {}
   }
 
   Future<void> setLanguage(AppLanguage value) async {
     language = value;
     await L10n.ensure(value);
     await _prefs.setString(_kLanguage, value.code);
+    unawaited(_persistDurable());
     notifyListeners();
   }
 
@@ -222,6 +365,7 @@ class SettingsController extends ChangeNotifier {
     themeMode = _modeFor(id);
     await _prefs.setString(_kThemeId, id.name);
     await _prefs.setInt(_kTheme, themeMode.index);
+    unawaited(_persistDurable());
     notifyListeners();
   }
 
@@ -232,6 +376,7 @@ class SettingsController extends ChangeNotifier {
       await _prefs.setInt(_kTheme, themeMode.index);
     }
     await _prefs.setInt(_kCustomBg, color.toARGB32());
+    unawaited(_persistDurable());
     notifyListeners();
   }
 
@@ -240,6 +385,7 @@ class SettingsController extends ChangeNotifier {
     useCustomAccent = true;
     await _prefs.setInt(_kCustomAccent, color.toARGB32());
     await _prefs.setBool(_kUseCustomAccent, true);
+    unawaited(_persistDurable());
     notifyListeners();
   }
 
@@ -248,12 +394,14 @@ class SettingsController extends ChangeNotifier {
     useCustomAccent = false;
     await _prefs.setInt(_kAccent, index);
     await _prefs.setBool(_kUseCustomAccent, false);
+    unawaited(_persistDurable());
     notifyListeners();
   }
 
   Future<void> setWallpaperBlur(double value) async {
     wallpaperBlur = value.clamp(0, 1);
     await _prefs.setDouble(_kWallpaperBlur, wallpaperBlur);
+    unawaited(_persistDurable());
     notifyListeners();
   }
 
@@ -263,6 +411,7 @@ class SettingsController extends ChangeNotifier {
     if ((clamped - uiScale).abs() < 0.001) return;
     uiScale = clamped;
     await _prefs.setDouble(_kUiScale, uiScale);
+    unawaited(_persistDurable());
     notifyListeners();
   }
 
@@ -331,25 +480,107 @@ class SettingsController extends ChangeNotifier {
       }
     }
 
-    final support = await getApplicationSupportDirectory();
-    final dest = File(
-      p.join(support.path, 'theme_wallpaper_${DateTime.now().millisecondsSinceEpoch}$ext'),
-    );
+    final root = await AppStorage.root();
+    final fileName = 'theme_wallpaper$ext';
+    final dest = File(p.join(root.path, fileName));
     await dest.writeAsBytes(bytes, flush: true);
 
     final previous = wallpaperPath;
     wallpaperPath = dest.path;
     wallpaperRevision++;
-    await _prefs.setString(_kWallpaper, dest.path);
+    await _prefs.setString(_kWallpaper, fileName);
     await setThemeId(AppThemeId.gallery);
+    unawaited(_persistDurable());
     notifyListeners();
 
-    if (previous != null && previous != dest.path) {
+    if (previous != null && p.normalize(previous) != p.normalize(dest.path)) {
       try {
         final old = File(previous);
-        if (await old.exists()) await old.delete();
+        final oldName = p.basename(old.path);
+        if (await old.exists() && oldName != fileName) await old.delete();
       } catch (_) {}
     }
+  }
+
+  /// Resolve wallpaper in the durable root (Windows + Android).
+  Future<void> _ensureWallpaperResolved() async {
+    try {
+      final root = await AppStorage.root();
+      final stored = wallpaperPath;
+
+      Future<bool> adopt(File file) async {
+        if (!await file.exists()) return false;
+        final name = p.basename(file.path);
+        final stableName = _stableWallpaperName(name);
+        var resolved = file;
+        if (name != stableName || p.normalize(p.dirname(file.path)) != p.normalize(root.path)) {
+          final dest = File(p.join(root.path, stableName));
+          if (p.normalize(file.path) != p.normalize(dest.path)) {
+            if (!await dest.exists()) {
+              await dest.parent.create(recursive: true);
+              await file.copy(dest.path);
+            }
+            resolved = dest;
+          }
+        }
+        wallpaperPath = resolved.path;
+        if (_prefs.getString(_kWallpaper) != stableName) {
+          await _prefs.setString(_kWallpaper, stableName);
+        }
+        return true;
+      }
+
+      if (stored != null && stored.isNotEmpty) {
+        final candidate = p.isAbsolute(stored)
+            ? File(stored)
+            : File(p.join(root.path, stored));
+        if (await adopt(candidate)) return;
+      }
+
+      final found = await _findWallpaperFile(root);
+      if (found != null && await adopt(found)) return;
+
+      for (final legacyRoot in await AppStorage.legacyRoots()) {
+        if (p.normalize(legacyRoot.path).toLowerCase() == p.normalize(root.path).toLowerCase()) {
+          continue;
+        }
+        final legacy = await _findWallpaperFile(legacyRoot);
+        if (legacy != null) await adopt(legacy);
+        if (hasWallpaper) return;
+      }
+    } catch (_) {}
+  }
+
+  String _stableWallpaperName(String name) {
+    final ext = p.extension(name);
+    final safeExt = ext.isEmpty ? '.jpg' : ext;
+    if (RegExp(r'^theme_wallpaper_\d+', caseSensitive: false).hasMatch(name)) {
+      return 'theme_wallpaper$safeExt';
+    }
+    if (name.toLowerCase().startsWith('theme_wallpaper')) {
+      return 'theme_wallpaper$safeExt';
+    }
+    return 'theme_wallpaper$safeExt';
+  }
+
+  Future<File?> _findWallpaperFile(Directory dir) async {
+    if (!await dir.exists()) return null;
+    File? best;
+    var bestStamp = -1;
+    await for (final entity in dir.list(followLinks: false)) {
+      if (entity is! File) continue;
+      final name = p.basename(entity.path);
+      if (!name.toLowerCase().startsWith('theme_wallpaper')) continue;
+      final match = RegExp(r'theme_wallpaper_(\d+)', caseSensitive: false).firstMatch(name);
+      final stamp = match != null
+          ? (int.tryParse(match.group(1)!) ?? 0)
+          : 1 << 30; // fixed name wins over timestamped
+      if (stamp >= bestStamp) {
+        bestStamp = stamp;
+        best = entity;
+      }
+    }
+    return best;
   }
 
   Future<void> setThemeMode(ThemeMode mode) async {
@@ -363,54 +594,67 @@ class SettingsController extends ChangeNotifier {
   Future<void> setMinDuration(int seconds) async {
     minDurationSec = seconds;
     await _prefs.setInt(_kMinDuration, seconds);
+    unawaited(_persistDurable());
     notifyListeners();
   }
 
   Future<void> setVolume(double value) async {
     volume = value.clamp(0, 1);
     await _prefs.setDouble(_kVolume, volume);
+    unawaited(_persistDurable());
     notifyListeners();
   }
 
   Future<void> setSpeed(double value, {bool persist = true}) async {
     speed = value.clamp(0.5, 1.5);
-    if (persist) await _prefs.setDouble(_kSpeed, speed);
+    if (persist) {
+      await _prefs.setDouble(_kSpeed, speed);
+      unawaited(_persistDurable());
+    }
     notifyListeners();
   }
 
   Future<void> setPitch(double value, {bool persist = true}) async {
     pitch = value.clamp(0.5, 1.5);
-    if (persist) await _prefs.setDouble(_kPitch, pitch);
+    if (persist) {
+      await _prefs.setDouble(_kPitch, pitch);
+      unawaited(_persistDurable());
+    }
     notifyListeners();
   }
 
   Future<void> setBeatHalo(bool value) async {
     beatHalo = value;
     await _prefs.setBool(_kBeatHalo, value);
+    unawaited(_persistDurable());
     notifyListeners();
   }
 
   Future<void> setBeatHaloMode(BeatHaloMode value) async {
     beatHaloMode = value;
     await _prefs.setString(_kBeatHaloMode, value.name);
+    unawaited(_persistDurable());
     notifyListeners();
   }
 
   Future<void> setInteractiveCover(bool value) async {
     interactiveCover = value;
     await _prefs.setBool(_kInteractiveCover, value);
+    unawaited(_persistDurable());
     notifyListeners();
   }
 
   Future<void> setInteractiveCoverMode(InteractiveCoverMode value) async {
     interactiveCoverMode = value;
     await _prefs.setString(_kInteractiveCoverMode, value.name);
+    unawaited(_persistDurable());
     notifyListeners();
   }
 
   Future<void> setShowLyricsOnCover(bool value) async {
     showLyricsOnCover = value;
     await _prefs.setBool(_kShowLyricsOnCover, value);
+    unawaited(_persistDurable());
     notifyListeners();
   }
 
@@ -418,30 +662,35 @@ class SettingsController extends ChangeNotifier {
     offlineMode = value;
     NetworkGate.offline = value;
     await _prefs.setBool(_kOffline, value);
+    unawaited(_persistDurable());
     notifyListeners();
   }
 
   Future<void> setStatsEnabled(bool value) async {
     statsEnabled = value;
     await _prefs.setBool(_kStatsEnabled, value);
+    unawaited(_persistDurable());
     notifyListeners();
   }
 
   Future<void> setPauseFade(bool value) async {
     pauseFade = value;
     await _prefs.setBool(_kPauseFade, value);
+    unawaited(_persistDurable());
     notifyListeners();
   }
 
   Future<void> setCrossfade(bool value) async {
     crossfade = value;
     await _prefs.setBool(_kCrossfade, value);
+    unawaited(_persistDurable());
     notifyListeners();
   }
 
   Future<void> setContinuous(bool value) async {
     continuous = value;
     await _prefs.setBool(_kContinuous, value);
+    unawaited(_persistDurable());
     notifyListeners();
   }
 
@@ -452,6 +701,7 @@ class SettingsController extends ChangeNotifier {
     await _prefs.setString(_kEq, jsonEncode(eqBands));
     await _prefs.setBool(_kEqOn, eqEnabled);
     await _prefs.setString(_kEqPreset, eqPreset);
+    unawaited(_persistDurable());
     notifyListeners();
   }
 
@@ -509,6 +759,7 @@ class SettingsController extends ChangeNotifier {
   Future<void> _saveLibraryFolders() async {
     await _prefs.setString(_kLibraryFolders, jsonEncode(libraryFolders));
     await _prefs.setString(_kFolders, jsonEncode(libraryFolders));
+    unawaited(_persistDurable());
   }
 
   Future<void> removeFolder(String path) async {
