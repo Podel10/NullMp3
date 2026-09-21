@@ -292,7 +292,12 @@ class _CoverCropStageState extends State<_CoverCropStage> {
             children: [
               Positioned.fromRect(
                 rect: fitted,
-                child: Image.memory(widget.bytes, fit: BoxFit.fill, gaplessPlayback: true),
+                child: Image.memory(
+                  widget.bytes,
+                  key: ValueKey<int>(identityHashCode(widget.bytes)),
+                  fit: BoxFit.fill,
+                  gaplessPlayback: true,
+                ),
               ),
               CustomPaint(
                 painter: _CropOverlayPainter(

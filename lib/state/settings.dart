@@ -28,6 +28,21 @@ enum BeatHaloMode {
   }
 }
 
+/// How volume is shown while dragging on the now-playing cover (Windows).
+enum InteractiveCoverMode {
+  /// Volume fill runs left → right across the cover.
+  horizontal,
+  /// Vertical volume panel on the cover.
+  vertical;
+
+  static InteractiveCoverMode fromName(String? name) {
+    return InteractiveCoverMode.values.firstWhere(
+      (value) => value.name == name,
+      orElse: () => InteractiveCoverMode.horizontal,
+    );
+  }
+}
+
 class SettingsController extends ChangeNotifier {
   static const _kTheme = 'themeMode';
   static const _kThemeId = 'themeId';
@@ -57,6 +72,13 @@ class SettingsController extends ChangeNotifier {
   static const _kBeatHaloMode = 'beatHaloMode';
   static const _kOffline = 'offlineMode';
   static const _kAskedAllFiles = 'askedAllFiles';
+  static const _kUiScale = 'uiScale';
+  static const _kInteractiveCover = 'interactiveCover';
+  static const _kInteractiveCoverMode = 'interactiveCoverMode';
+
+  static const double minUiScale = 0.75;
+  static const double maxUiScale = 1.75;
+  static const double uiScaleStep = 0.1;
 
   late SharedPreferences _prefs;
 
@@ -68,6 +90,8 @@ class SettingsController extends ChangeNotifier {
   bool useCustomAccent = false;
   String? wallpaperPath;
   double wallpaperBlur = 0.45;
+  /// Desktop UI zoom (1.0 = 100%). Windows Ctrl+/−/0.
+  double uiScale = 1.0;
   int minDurationSec = 0;
   List<String> libraryFolders = [];
   List<String> extraFiles = [];
@@ -83,6 +107,9 @@ class SettingsController extends ChangeNotifier {
   bool statsEnabled = true;
   bool beatHalo = false;
   BeatHaloMode beatHaloMode = BeatHaloMode.advanced;
+  /// Windows: drag on now-playing cover to change volume.
+  bool interactiveCover = false;
+  InteractiveCoverMode interactiveCoverMode = InteractiveCoverMode.horizontal;
   bool offlineMode = false;
   AppLanguage language = AppLanguage.english;
 
@@ -126,6 +153,7 @@ class SettingsController extends ChangeNotifier {
     useCustomAccent = _prefs.getBool(_kUseCustomAccent) ?? false;
     wallpaperPath = _prefs.getString(_kWallpaper);
     wallpaperBlur = _prefs.getDouble(_kWallpaperBlur) ?? 0.45;
+    uiScale = (_prefs.getDouble(_kUiScale) ?? 1.0).clamp(minUiScale, maxUiScale);
     minDurationSec = _prefs.getInt(_kMinDuration) ?? 0;
     extraFiles = List<String>.from(jsonDecode(_prefs.getString(_kExtraFiles) ?? '[]'));
     final storedLibrary = _prefs.getString(_kLibraryFolders);
@@ -156,6 +184,9 @@ class SettingsController extends ChangeNotifier {
     statsEnabled = _prefs.getBool(_kStatsEnabled) ?? true;
     beatHalo = _prefs.getBool(_kBeatHalo) ?? false;
     beatHaloMode = BeatHaloMode.fromName(_prefs.getString(_kBeatHaloMode));
+    interactiveCover = _prefs.getBool(_kInteractiveCover) ?? false;
+    interactiveCoverMode =
+        InteractiveCoverMode.fromName(_prefs.getString(_kInteractiveCoverMode));
     offlineMode = _prefs.getBool(_kOffline) ?? false;
     _askedAllFiles = _prefs.getBool(_kAskedAllFiles) ?? false;
     NetworkGate.offline = offlineMode;
@@ -219,6 +250,21 @@ class SettingsController extends ChangeNotifier {
     await _prefs.setDouble(_kWallpaperBlur, wallpaperBlur);
     notifyListeners();
   }
+
+  Future<void> setUiScale(double value) async {
+    final next = (value * 100).round() / 100;
+    final clamped = next.clamp(minUiScale, maxUiScale);
+    if ((clamped - uiScale).abs() < 0.001) return;
+    uiScale = clamped;
+    await _prefs.setDouble(_kUiScale, uiScale);
+    notifyListeners();
+  }
+
+  Future<void> zoomIn() => setUiScale(uiScale + uiScaleStep);
+
+  Future<void> zoomOut() => setUiScale(uiScale - uiScaleStep);
+
+  Future<void> resetUiScale() => setUiScale(1.0);
 
   Future<void> pickWallpaper() async {
     if (!kIsWeb && Platform.isAndroid) {
@@ -285,6 +331,18 @@ class SettingsController extends ChangeNotifier {
   Future<void> setBeatHaloMode(BeatHaloMode value) async {
     beatHaloMode = value;
     await _prefs.setString(_kBeatHaloMode, value.name);
+    notifyListeners();
+  }
+
+  Future<void> setInteractiveCover(bool value) async {
+    interactiveCover = value;
+    await _prefs.setBool(_kInteractiveCover, value);
+    notifyListeners();
+  }
+
+  Future<void> setInteractiveCoverMode(InteractiveCoverMode value) async {
+    interactiveCoverMode = value;
+    await _prefs.setString(_kInteractiveCoverMode, value.name);
     notifyListeners();
   }
 

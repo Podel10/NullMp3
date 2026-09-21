@@ -1,5 +1,6 @@
 import 'dart:ui';
 
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
@@ -12,6 +13,7 @@ import '../models/models.dart';
 import '../state/settings.dart';
 import '../theme/app_theme.dart';
 import 'beat_halo.dart';
+import 'interactive_cover.dart';
 import 'widgets.dart';
 
 class NowPlayingScreen extends StatelessWidget {
@@ -107,19 +109,25 @@ class NowPlayingScreen extends StatelessWidget {
                         child: SizedBox(
                           width: side,
                           height: side,
-                          child: BeatHaloCover(
-                            child: CoverArt(
-                              key: ValueKey('art-${track.path}-${track.coverShape.name}'),
-                              track: track,
-                              radius: 10,
-                              expand: true,
-                              muted: true,
-                              loadArtwork: true,
-                              animate: true,
-                              liveRim: settings.beatHalo &&
-                                  settings.beatHaloMode == BeatHaloMode.advanced,
-                              softEdge: settings.beatHalo && track.isCircleCover,
-                              heroTag: 'now-art',
+                          child: InteractiveCover(
+                            enabled: !kIsWeb &&
+                                defaultTargetPlatform == TargetPlatform.windows &&
+                                settings.interactiveCover,
+                            mode: settings.interactiveCoverMode,
+                            child: BeatHaloCover(
+                              child: CoverArt(
+                                key: ValueKey('art-${track.path}-${track.coverShape.name}'),
+                                track: track,
+                                radius: 10,
+                                expand: true,
+                                muted: true,
+                                loadArtwork: true,
+                                animate: true,
+                                liveRim: settings.beatHalo &&
+                                    settings.beatHaloMode == BeatHaloMode.advanced,
+                                softEdge: settings.beatHalo && track.isCircleCover,
+                                heroTag: 'now-art',
+                              ),
                             ),
                           ),
                         ),

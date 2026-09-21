@@ -327,36 +327,53 @@ class _WebAudioJob {
 
     final media = track['media'];
     final transcodings = media is Map ? media['transcodings'] : track['transcodings'];
-    final picked = _pickSoundCloudTranscoding(transcodings);
-    if (picked == null) throw const WebAudioException('failed');
-    final stream = await _soundCloudStream(picked);
-    if (stream == null) throw const WebAudioException('failed');
+    final candidates = _soundCloudTranscodingCandidates(transcodings);
+    if (candidates.isEmpty) throw const WebAudioException('failed');
 
-    final dest = await _uniqueFile(dir, _fileStem(artist, title), stream.ext);
-    onProgress?.call(WebAudioProgress(title: title, index: index, total: total, fraction: 0));
-    if (stream.hls) {
-      await _downloadHls(stream.url!, dest);
-    } else {
-      await _downloadUrl(
-        stream.url!,
-        dest,
-        referer: 'https://soundcloud.com/',
-        onBytes: (got, totalBytes) => onProgress?.call(
-          WebAudioProgress(
-            title: title,
-            index: index,
-            total: total,
-            fraction: totalBytes == null || totalBytes <= 0 ? null : (got / totalBytes).clamp(0.0, 1.0),
-          ),
-        ),
-      );
+    File? dest;
+    for (final picked in candidates) {
+      _throwIfStop();
+      try {
+        final stream = await _soundCloudStream(picked);
+        if (stream == null) continue;
+        dest = await _uniqueFile(dir, _fileStem(artist, title), stream.ext);
+        onProgress?.call(WebAudioProgress(title: title, index: index, total: total, fraction: 0));
+        if (stream.hls) {
+          await _downloadHls(stream.url!, dest);
+        } else {
+          await _downloadUrl(
+            stream.url!,
+            dest,
+            referer: 'https://soundcloud.com/',
+            onBytes: (got, totalBytes) => onProgress?.call(
+              WebAudioProgress(
+                title: title,
+                index: index,
+                total: total,
+                fraction: totalBytes == null || totalBytes <= 0 ? null : (got / totalBytes).clamp(0.0, 1.0),
+              ),
+            ),
+          );
+        }
+        final path = await _renameByMagic(dest);
+        final cover = await _coverBytes(_soundArtwork(track['artwork_url'] as String?));
+        onProgress?.call(WebAudioProgress(title: title, index: index, total: total, stage: 'tag'));
+        await _tagFile(path, title: title, artist: artist, album: album, cover: cover);
+        return WebAudioFile(path: path, title: title, artist: artist, cover: cover);
+      } on WebAudioException catch (error) {
+        if (error.code == 'cancelled') rethrow;
+        try {
+          if (dest != null && await dest.exists()) await dest.delete();
+        } catch (_) {}
+        dest = null;
+      } catch (_) {
+        try {
+          if (dest != null && await dest.exists()) await dest.delete();
+        } catch (_) {}
+        dest = null;
+      }
     }
-
-    final path = await _renameByMagic(dest);
-    final cover = await _coverBytes(_soundArtwork(track['artwork_url'] as String?));
-    onProgress?.call(WebAudioProgress(title: title, index: index, total: total, stage: 'tag'));
-    await _tagFile(path, title: title, artist: artist, album: album, cover: cover);
-    return WebAudioFile(path: path, title: title, artist: artist, cover: cover);
+    throw const WebAudioException('failed');
   }
 
   Future<Map<String, dynamic>> _resolveSoundCloud(String url) async {
@@ -445,12 +462,15 @@ class _WebAudioJob {
     return out;
   }
 
-  Map<String, dynamic>? _pickSoundCloudTranscoding(Object? raw) {
-    if (raw is! List) return null;
+  /// Prefer progressive MP3, then HLS MP3, then any progressive / HLS.
+  /// Stream endpoints work whether or not the artist enabled official Download.
+  List<Map<String, dynamic>> _soundCloudTranscodingCandidates(Object? raw) {
+    if (raw is! List) return const [];
     Map<String, dynamic>? progressiveMp3;
     Map<String, dynamic>? hlsMp3;
     Map<String, dynamic>? progressive;
     Map<String, dynamic>? hls;
+    final extras = <Map<String, dynamic>>[];
     for (final item in raw) {
       if (item is! Map) continue;
       final row = Map<String, dynamic>.from(item);
@@ -463,14 +483,22 @@ class _WebAudioJob {
       if (protocol == 'progressive' && mp3) {
         if (progressiveMp3 == null || hq) progressiveMp3 = row;
       } else if (protocol.contains('hls') && mp3) {
-        hlsMp3 ??= row;
+        if (hlsMp3 == null || hq) hlsMp3 = row;
       } else if (protocol == 'progressive') {
-        progressive ??= row;
+        if (progressive == null || hq) progressive = row;
       } else if (protocol.contains('hls')) {
-        hls ??= row;
+        if (hls == null || hq) hls = row;
+      } else {
+        extras.add(row);
       }
     }
-    return progressiveMp3 ?? hlsMp3 ?? progressive ?? hls;
+    return [
+      if (progressiveMp3 != null) progressiveMp3,
+      if (hlsMp3 != null) hlsMp3,
+      if (progressive != null) progressive,
+      if (hls != null) hls,
+      ...extras,
+    ];
   }
 
   Future<_AudioSource?> _soundCloudStream(Map<String, dynamic> transcoding) async {
@@ -571,6 +599,8 @@ class _WebAudioJob {
     final request = await _client.getUrl(uri);
     request.followRedirects = true;
     request.headers.set(HttpHeaders.userAgentHeader, _kAgent);
+    request.headers.set(HttpHeaders.acceptHeader, '*/*');
+    request.headers.set('Origin', 'https://soundcloud.com');
     if (referer != null) {
       request.headers.set(HttpHeaders.refererHeader, referer);
     }
@@ -625,6 +655,7 @@ class _WebAudioJob {
     request.followRedirects = true;
     request.headers.set(HttpHeaders.userAgentHeader, _kAgent);
     request.headers.set(HttpHeaders.acceptHeader, '*/*');
+    request.headers.set('Origin', 'https://soundcloud.com');
     if (referer != null) request.headers.set(HttpHeaders.refererHeader, referer);
     final response = await request.close().timeout(const Duration(seconds: 20));
     if (response.statusCode < 200 || response.statusCode >= 300) {

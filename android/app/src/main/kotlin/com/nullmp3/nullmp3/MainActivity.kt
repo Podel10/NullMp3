@@ -6,6 +6,8 @@ import android.content.ContentUris
 import android.content.ContentValues
 import android.content.Context
 import android.content.Intent
+import android.graphics.Bitmap
+import android.graphics.BitmapFactory
 import android.media.AudioAttributes
 import android.media.MediaPlayer
 import android.net.Uri
@@ -24,6 +26,7 @@ import io.flutter.embedding.engine.FlutterEngine
 import io.flutter.embedding.engine.FlutterEngineCache
 import io.flutter.plugin.common.EventChannel
 import io.flutter.plugin.common.MethodChannel
+import java.io.ByteArrayOutputStream
 import java.io.File
 import java.util.concurrent.Executors
 import java.util.concurrent.atomic.AtomicBoolean
@@ -1106,24 +1109,28 @@ class MainActivity : FlutterActivity() {
             "image/webp",
             "image/jpeg",
             "image/png",
+            "image/heic",
+            "image/heif",
             "video/mp4",
             "video/webm",
             "image/*",
+            "video/*",
         )
+        // GET_CONTENT is reliable for repeated picks from gallery/Photos.
+        // OPEN_DOCUMENT + persistable grants often break on a second selection.
         val intents = mutableListOf(
+            Intent(Intent.ACTION_GET_CONTENT).apply {
+                addCategory(Intent.CATEGORY_OPENABLE)
+                type = "*/*"
+                putExtra(Intent.EXTRA_MIME_TYPES, mimeTypes)
+                putExtra(Intent.EXTRA_ALLOW_MULTIPLE, false)
+                addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+            },
             Intent(Intent.ACTION_OPEN_DOCUMENT).apply {
                 addCategory(Intent.CATEGORY_OPENABLE)
                 type = "*/*"
                 putExtra(Intent.EXTRA_MIME_TYPES, mimeTypes)
-                addFlags(
-                    Intent.FLAG_GRANT_READ_URI_PERMISSION or
-                        Intent.FLAG_GRANT_PERSISTABLE_URI_PERMISSION,
-                )
-            },
-            Intent(Intent.ACTION_GET_CONTENT).apply {
-                type = "*/*"
-                addCategory(Intent.CATEGORY_OPENABLE)
-                putExtra(Intent.EXTRA_MIME_TYPES, mimeTypes)
+                putExtra(Intent.EXTRA_ALLOW_MULTIPLE, false)
                 addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
             },
             Intent(Intent.ACTION_PICK, MediaStore.Images.Media.EXTERNAL_CONTENT_URI),
@@ -1182,8 +1189,16 @@ class MainActivity : FlutterActivity() {
     }
 
     private fun readPickedBytes(uri: Uri): ByteArray? {
+        // Prefer a plain stream first — works for every repeated gallery pick.
+        try {
+            contentResolver.openInputStream(uri)?.use { stream ->
+                val bytes = stream.readBytes()
+                if (bytes.isNotEmpty()) return ensureFlutterDecodable(bytes)
+            }
+        } catch (_: Exception) {
+        }
         val extras = originalOpenExtras()
-        val targets = listOf(mediaStoreUri(uri), uri).distinct()
+        val targets = listOf(uri, mediaStoreUri(uri)).distinct()
         val mimes = listOf(
             contentResolver.getType(uri),
             "*/*",
@@ -1191,6 +1206,8 @@ class MainActivity : FlutterActivity() {
             "video/*",
             "image/gif",
             "image/webp",
+            "image/heic",
+            "image/heif",
             "video/mp4",
             "video/webm",
         ).filterNotNull().distinct()
@@ -1198,23 +1215,105 @@ class MainActivity : FlutterActivity() {
             for (mime in mimes) {
                 try {
                     contentResolver.openTypedAssetFileDescriptor(target, mime, extras)?.use { afd ->
-                        return afd.createInputStream().use { it.readBytes() }
+                        val bytes = afd.createInputStream().use { it.readBytes() }
+                        if (bytes.isNotEmpty()) return ensureFlutterDecodable(bytes)
                     }
                 } catch (_: Exception) {
                 }
             }
             try {
                 contentResolver.openAssetFileDescriptor(target, "r")?.use { afd ->
-                    return afd.createInputStream().use { it.readBytes() }
+                    val bytes = afd.createInputStream().use { it.readBytes() }
+                    if (bytes.isNotEmpty()) return ensureFlutterDecodable(bytes)
                 }
             } catch (_: Exception) {
             }
             try {
-                contentResolver.openInputStream(target)?.use { return it.readBytes() }
+                contentResolver.openInputStream(target)?.use { stream ->
+                    val bytes = stream.readBytes()
+                    if (bytes.isNotEmpty()) return ensureFlutterDecodable(bytes)
+                }
             } catch (_: Exception) {
             }
         }
-        return readFromMediaPath(uri)
+        val pathBytes = readFromMediaPath(uri) ?: return null
+        return ensureFlutterDecodable(pathBytes)
+    }
+
+    /** HEIC/unknown stills from Photos need a PNG/JPEG Flutter can decode. */
+    private fun ensureFlutterDecodable(bytes: ByteArray): ByteArray {
+        if (bytes.size < 12) return bytes
+        if (isGifHeader(bytes) || isWebpHeader(bytes) || isPngHeader(bytes) || isJpegHeader(bytes)) {
+            return bytes
+        }
+        if (isVideoHeader(bytes)) return bytes
+        return try {
+            val opts = BitmapFactory.Options().apply { inJustDecodeBounds = true }
+            BitmapFactory.decodeByteArray(bytes, 0, bytes.size, opts)
+            if (opts.outWidth <= 0 || opts.outHeight <= 0) return bytes
+            var sample = 1
+            val maxSide = 2048
+            while (opts.outWidth / sample > maxSide || opts.outHeight / sample > maxSide) {
+                sample *= 2
+            }
+            val decode = BitmapFactory.Options().apply { inSampleSize = sample }
+            val bitmap = BitmapFactory.decodeByteArray(bytes, 0, bytes.size, decode) ?: return bytes
+            try {
+                val out = ByteArrayOutputStream()
+                val ok = bitmap.compress(Bitmap.CompressFormat.PNG, 100, out)
+                if (!ok) bytes else out.toByteArray()
+            } finally {
+                bitmap.recycle()
+            }
+        } catch (_: Exception) {
+            bytes
+        }
+    }
+
+    private fun isJpegHeader(bytes: ByteArray) =
+        bytes.size >= 3 && bytes[0] == 0xFF.toByte() && bytes[1] == 0xD8.toByte()
+
+    private fun isPngHeader(bytes: ByteArray) =
+        bytes.size >= 8 && bytes[0] == 0x89.toByte() && bytes[1] == 0x50.toByte()
+
+    private fun isGifHeader(bytes: ByteArray) =
+        bytes.size >= 6 &&
+            bytes[0] == 'G'.code.toByte() &&
+            bytes[1] == 'I'.code.toByte() &&
+            bytes[2] == 'F'.code.toByte()
+
+    private fun isWebpHeader(bytes: ByteArray) =
+        bytes.size >= 12 &&
+            bytes[0] == 'R'.code.toByte() &&
+            bytes[1] == 'I'.code.toByte() &&
+            bytes[2] == 'F'.code.toByte() &&
+            bytes[8] == 'W'.code.toByte() &&
+            bytes[9] == 'E'.code.toByte()
+
+    private fun isVideoHeader(bytes: ByteArray): Boolean {
+        if (bytes.size >= 4 &&
+            bytes[0] == 0x1A.toByte() &&
+            bytes[1] == 0x45.toByte() &&
+            bytes[2] == 0xDF.toByte() &&
+            bytes[3] == 0xA3.toByte()
+        ) {
+            return true
+        }
+        val limit = minOf(64, bytes.size - 8)
+        for (i in 0 until limit) {
+            if (bytes[i] == 'f'.code.toByte() &&
+                bytes[i + 1] == 't'.code.toByte() &&
+                bytes[i + 2] == 'y'.code.toByte() &&
+                bytes[i + 3] == 'p'.code.toByte()
+            ) {
+                val brand = bytes.copyOfRange(i + 4, i + 8).toString(Charsets.US_ASCII).lowercase()
+                if (brand in setOf("heic", "heix", "hevc", "hevx", "mif1", "msf1", "avif", "avis")) {
+                    return false
+                }
+                return true
+            }
+        }
+        return false
     }
 
     override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) {
@@ -1257,22 +1356,27 @@ class MainActivity : FlutterActivity() {
                 pending?.success(null)
                 return
             }
-            try {
-                try {
-                    contentResolver.takePersistableUriPermission(
-                        uri,
-                        Intent.FLAG_GRANT_READ_URI_PERMISSION,
-                    )
+            // Read off the UI thread — gallery URIs can be slow on a second pick.
+            editorExecutor.execute {
+                val bytes = try {
+                    try {
+                        contentResolver.takePersistableUriPermission(
+                            uri,
+                            Intent.FLAG_GRANT_READ_URI_PERMISSION,
+                        )
+                    } catch (_: Exception) {
+                    }
+                    readPickedBytes(uri)
                 } catch (_: Exception) {
+                    null
                 }
-                val bytes = readPickedBytes(uri)
-                if (bytes == null) {
-                    pending?.error("pick_failed", "Could not read image", null)
-                } else {
-                    pending?.success(bytes)
+                mainHandler.post {
+                    if (bytes == null || bytes.isEmpty()) {
+                        pending?.error("pick_failed", "Could not read image", null)
+                    } else {
+                        pending?.success(bytes)
+                    }
                 }
-            } catch (error: Exception) {
-                pending?.error("pick_failed", error.message, null)
             }
             return
         }

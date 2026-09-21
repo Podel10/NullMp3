@@ -207,21 +207,26 @@ Future<Uint8List?> pickCoverBytes() async {
     } catch (_) {}
     try {
       final data = _asBytes(await _filesChannel.invokeMethod<dynamic>('pickImage'));
-      if (data != null && data.isNotEmpty) return await downscaleCover(normalizeCoverBytes(data));
-      return null;
+      if (data != null && data.isNotEmpty) {
+        return await downscaleCover(normalizeCoverBytes(Uint8List.fromList(data)));
+      }
     } catch (_) {}
+    // Stay on the native picker path — do not fall through to FilePicker on Android.
+    return null;
   }
   try {
-    final result = await FilePicker.pickFiles(
+    // Single-file pick — allowMultiple defaults to true on pickFiles and can
+    // return a bad/empty first entry on a second open (especially on Windows).
+    final file = await FilePicker.pickFile(
       type: FileType.custom,
       allowedExtensions: const ['jpg', 'jpeg', 'png', 'gif', 'webp', 'bmp', 'mp4', 'webm'],
       compressionQuality: 0,
+      windowsOptions: const WindowsOptions(lockParentWindow: true),
     );
-    for (final file in result) {
-      final bytes = await file.readAsBytes();
-      if (bytes.isNotEmpty) return await downscaleCover(normalizeCoverBytes(bytes));
-    }
-    return null;
+    if (file == null) return null;
+    final bytes = await file.readAsBytes();
+    if (bytes.isEmpty) return null;
+    return await downscaleCover(normalizeCoverBytes(Uint8List.fromList(bytes)));
   } catch (_) {
     return null;
   }

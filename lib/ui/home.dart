@@ -1,5 +1,6 @@
 import 'dart:async';
 
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 
@@ -13,6 +14,7 @@ import '../state/library.dart';
 import '../state/player.dart';
 import '../state/settings.dart';
 import 'alphabet_index.dart';
+import 'customization_settings.dart';
 import 'details.dart';
 import 'equalizer.dart';
 import 'library_folders.dart';
@@ -23,6 +25,7 @@ import 'settings.dart';
 import 'theme_settings.dart';
 import 'tools.dart';
 import 'widgets.dart';
+import 'zoom_settings.dart';
 
 class HomeScreen extends StatefulWidget {
   const HomeScreen({super.key});
@@ -268,6 +271,18 @@ class _AppDrawer extends StatelessWidget {
                 ],
               ),
             ),
+            if (!kIsWeb && defaultTargetPlatform == TargetPlatform.windows)
+              ListTile(
+                leading: const Icon(Icons.zoom_in_rounded),
+                title: Text(s.zoomSettings),
+                onTap: () {
+                  Navigator.pop(context);
+                  Navigator.push(
+                    context,
+                    MaterialPageRoute<void>(builder: (_) => const ZoomSettingsScreen()),
+                  );
+                },
+              ),
             ListTile(
               leading: const Icon(Icons.palette_outlined),
               title: Text(s.themeSettings),
@@ -276,6 +291,18 @@ class _AppDrawer extends StatelessWidget {
                 Navigator.push(context, MaterialPageRoute<void>(builder: (_) => const ThemeSettingsScreen()));
               },
             ),
+            if (!kIsWeb && defaultTargetPlatform == TargetPlatform.windows)
+              ListTile(
+                leading: const Icon(Icons.tune_rounded),
+                title: Text(s.customization),
+                onTap: () {
+                  Navigator.pop(context);
+                  Navigator.push(
+                    context,
+                    MaterialPageRoute<void>(builder: (_) => const CustomizationSettingsScreen()),
+                  );
+                },
+              ),
             ListTile(
               leading: const Icon(Icons.equalizer_rounded),
               title: Text(s.equalizer),

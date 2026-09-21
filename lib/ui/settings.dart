@@ -6,6 +6,7 @@ import '../l10n/strings.dart';
 import '../state/library.dart';
 import '../state/player.dart';
 import '../state/settings.dart';
+import 'app_labeled_slider.dart';
 
 class SettingsScreen extends StatelessWidget {
   const SettingsScreen({super.key});
@@ -36,12 +37,12 @@ class SettingsScreen extends StatelessWidget {
             title: Text(s.skipShortTracks),
             subtitle: Text(settings.minDurationSec == 0 ? s.off : s.seconds(settings.minDurationSec)),
           ),
-          Slider(
+          AppLabeledSlider(
             min: 0,
             max: 60,
             divisions: 12,
             value: settings.minDurationSec.toDouble(),
-            label: settings.minDurationSec == 0 ? s.off : '${settings.minDurationSec}s',
+            labelOf: (value) => value.round() == 0 ? s.off : '${value.round()}s',
             onChanged: (value) => settings.setMinDuration(value.round()),
           ),
           ListTile(

@@ -9,7 +9,9 @@ import 'state/library.dart';
 import 'state/player.dart';
 import 'state/settings.dart';
 import 'theme/app_theme.dart';
+import 'ui/desktop_hotkeys.dart';
 import 'ui/home.dart';
+import 'ui/ui_zoom.dart';
 import 'ui/wallpaper.dart';
 
 Future<void> main() async {
@@ -98,7 +100,11 @@ class NullMp3App extends StatelessWidget {
                   },
                   settings.accent,
                 ),
-      builder: (context, child) => AppWallpaper(child: child ?? const SizedBox.shrink()),
+      builder: (context, child) => AppWallpaper(
+        child: DesktopHotkeys(
+          child: UiZoom(child: child ?? const SizedBox.shrink()),
+        ),
+      ),
       home: const HomeScreen(),
     );
   }

@@ -1,5 +1,6 @@
-import 'dart:typed_data';
+import 'dart:async';
 
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 
@@ -43,6 +44,7 @@ class _TagEditorSheetState extends State<TagEditorSheet> {
   late final TextEditingController _composer;
   Uint8List? _cover;
   bool _coverChanged = false;
+  int _coverGen = 0;
   bool _saving = false;
   bool _picking = false;
   String? _error;
@@ -57,8 +59,29 @@ class _TagEditorSheetState extends State<TagEditorSheet> {
     _albumArtist = TextEditingController(text: widget.track.albumArtist ?? '');
     _composer = TextEditingController(text: widget.track.composer ?? '');
     _coverShape = widget.track.coverShape;
-    ArtworkStore.instance.get(widget.track.path).then((bytes) {
-      if (mounted && bytes != null) setState(() => _cover = bytes);
+    unawaited(_loadExistingCover());
+  }
+
+  Future<void> _loadExistingCover() async {
+    final bytes = await ArtworkStore.instance.get(widget.track.path);
+    if (!mounted || _coverChanged || bytes == null || bytes.isEmpty) return;
+    // Video covers only keep a short header in memory — use the poster frame
+    // so the preview is not a blank grey box.
+    if (isVideoBytes(bytes) && bytes.length <= 256) {
+      final poster = await ArtworkStore.instance.poster(widget.track.path);
+      if (!mounted || _coverChanged) return;
+      if (poster != null && poster.isNotEmpty) {
+        setState(() {
+          _cover = poster;
+          _coverGen++;
+        });
+        return;
+      }
+    }
+    if (!mounted || _coverChanged) return;
+    setState(() {
+      _cover = bytes;
+      _coverGen++;
     });
   }
 
@@ -85,16 +108,28 @@ class _TagEditorSheetState extends State<TagEditorSheet> {
         setState(() => _picking = false);
         return;
       }
-      if (!mounted) return;
-      setState(() => _picking = false);
       final cropped = await showCoverCrop(context, picked);
       if (!mounted) return;
-      if (cropped == null || cropped.isEmpty) return;
+      if (cropped == null || cropped.isEmpty) {
+        setState(() => _picking = false);
+        return;
+      }
       final cover = await downscaleCover(cropped);
       if (!mounted) return;
+      if (cover.isEmpty) {
+        setState(() {
+          _picking = false;
+          _error = context.s.pickCoverFailed;
+        });
+        return;
+      }
       setState(() {
-        _cover = cover;
+        // Fresh list so Image/CoverBytesView cannot reuse a stale provider.
+        _cover = Uint8List.fromList(cover);
         _coverChanged = true;
+        _coverGen++;
+        _picking = false;
+        _error = null;
       });
     } catch (_) {
       if (!mounted) return;
@@ -121,8 +156,9 @@ class _TagEditorSheetState extends State<TagEditorSheet> {
       setState(() {
         _picking = false;
         if (picked != null && picked.isNotEmpty) {
-          _cover = picked;
+          _cover = Uint8List.fromList(picked);
           _coverChanged = true;
+          _coverGen++;
         }
       });
     } catch (_) {
@@ -142,8 +178,9 @@ class _TagEditorSheetState extends State<TagEditorSheet> {
     final cover = await downscaleCover(cropped);
     if (!mounted) return;
     setState(() {
-      _cover = cover;
+      _cover = Uint8List.fromList(cover);
       _coverChanged = true;
+      _coverGen++;
     });
   }
 
@@ -292,7 +329,12 @@ class _TagEditorSheetState extends State<TagEditorSheet> {
                   SwitchListTile(
                     contentPadding: EdgeInsets.zero,
                     title: Text(s.beatHalo, style: const TextStyle(color: Colors.white)),
-                    subtitle: Text(s.beatHaloHint, style: const TextStyle(color: Colors.white54, fontSize: 12)),
+                    subtitle: Text(
+                      !kIsWeb && defaultTargetPlatform == TargetPlatform.android
+                          ? s.beatHaloHint
+                          : s.beatHaloHintDesktop,
+                      style: const TextStyle(color: Colors.white54, fontSize: 12),
+                    ),
                     value: context.watch<SettingsController>().beatHalo,
                     onChanged: (value) => context.read<SettingsController>().setBeatHalo(value),
                   ),
@@ -427,12 +469,17 @@ class _TagEditorSheetState extends State<TagEditorSheet> {
             child: Icon(Icons.music_note, color: Colors.white54, size: 56),
           )
         : CoverBytesView(
+            key: ValueKey<int>(_coverGen),
             bytes: _cover!,
             fit: BoxFit.cover,
             animate: true,
             playing: true,
             cacheWidth: 480,
             artworkPath: _coverChanged ? null : widget.track.path,
+            errorBuilder: (_, _, _) => const ColoredBox(
+              color: Color(0xFF3A4A56),
+              child: Icon(Icons.broken_image_outlined, color: Colors.white54, size: 40),
+            ),
           );
     if (_coverShape == CoverShape.circle) {
       return ClipOval(child: art);

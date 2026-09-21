@@ -153,6 +153,7 @@ class AppTheme {
         overlayColor: accent.withValues(alpha: 0.16),
         trackHeight: 3,
         thumbShape: const RoundSliderThumbShape(enabledThumbRadius: 6),
+        showValueIndicator: ShowValueIndicator.never,
       ),
       navigationRailTheme: NavigationRailThemeData(
         backgroundColor: Color.lerp(scaffold, isDark ? Colors.white : Colors.black, isDark ? 0.06 : 0.04),
