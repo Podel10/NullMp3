@@ -110,10 +110,10 @@ class SettingsController extends ChangeNotifier {
   bool statsEnabled = true;
   bool beatHalo = false;
   BeatHaloMode beatHaloMode = BeatHaloMode.advanced;
-  /// Windows: drag on now-playing cover to change volume.
+  /// Drag on now-playing cover to change volume (Windows / Android).
   bool interactiveCover = false;
   InteractiveCoverMode interactiveCoverMode = InteractiveCoverMode.horizontal;
-  /// Windows: lyrics toggle on now-playing cover (karaoke-style).
+  /// Lyrics toggle on now-playing cover (karaoke-style).
   bool showLyricsOnCover = false;
   bool offlineMode = false;
   AppLanguage language = AppLanguage.english;

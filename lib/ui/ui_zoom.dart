@@ -1,18 +1,17 @@
-import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:provider/provider.dart';
 
+import 'platform_features.dart';
 import '../state/settings.dart';
 
-/// Windows-only UI zoom: Ctrl+/Ctrl−/Ctrl+0, persisted via [SettingsController.uiScale].
+/// UI zoom: Ctrl+/Ctrl−/Ctrl+0 on desktop; Zoom settings on Windows and Android.
 class UiZoom extends StatefulWidget {
   const UiZoom({super.key, required this.child});
 
   final Widget child;
 
-  static bool get enabled =>
-      !kIsWeb && defaultTargetPlatform == TargetPlatform.windows;
+  static bool get enabled => pcParityEnabled;
 
   @override
   State<UiZoom> createState() => _UiZoomState();

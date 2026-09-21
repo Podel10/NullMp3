@@ -15,6 +15,7 @@ import '../theme/app_theme.dart';
 import 'beat_halo.dart';
 import 'cover_lyrics.dart';
 import 'interactive_cover.dart';
+import 'platform_features.dart';
 import 'widgets.dart';
 
 class NowPlayingScreen extends StatelessWidget {
@@ -113,13 +114,9 @@ class NowPlayingScreen extends StatelessWidget {
                           child: _NowPlayingCover(
                             track: track,
                             onAmbient: onAmbient,
-                            interactiveCover: !kIsWeb &&
-                                defaultTargetPlatform == TargetPlatform.windows &&
-                                settings.interactiveCover,
+                            interactiveCover: pcParityEnabled && settings.interactiveCover,
                             interactiveMode: settings.interactiveCoverMode,
-                            lyricsButton: !kIsWeb &&
-                                defaultTargetPlatform == TargetPlatform.windows &&
-                                settings.showLyricsOnCover,
+                            lyricsButton: pcParityEnabled && settings.showLyricsOnCover,
                             beatHalo: settings.beatHalo,
                             beatHaloAdvanced: settings.beatHaloMode == BeatHaloMode.advanced,
                           ),

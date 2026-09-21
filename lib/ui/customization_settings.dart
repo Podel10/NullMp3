@@ -3,8 +3,9 @@ import 'package:provider/provider.dart';
 
 import '../l10n/strings.dart';
 import '../state/settings.dart';
+import 'platform_features.dart';
 
-/// Windows-only: interactive cover + keyboard shortcut reference.
+/// Interactive cover + lyrics on cover; keyboard shortcuts listed on desktop.
 class CustomizationSettingsScreen extends StatelessWidget {
   const CustomizationSettingsScreen({super.key});
 
@@ -58,13 +59,15 @@ class CustomizationSettingsScreen extends StatelessWidget {
             value: settings.showLyricsOnCover,
             onChanged: settings.setShowLyricsOnCover,
           ),
-          const SizedBox(height: 28),
-          Text(s.hotkeys, style: Theme.of(context).textTheme.titleSmall),
-          const SizedBox(height: 8),
-          _HotkeyLine(s.hotkeyPlayPause),
-          _HotkeyLine(s.hotkeySeek),
-          _HotkeyLine(s.hotkeyVolume),
-          _HotkeyLine(s.hotkeyMute),
+          if (desktopHotkeysEnabled) ...[
+            const SizedBox(height: 28),
+            Text(s.hotkeys, style: Theme.of(context).textTheme.titleSmall),
+            const SizedBox(height: 8),
+            _HotkeyLine(s.hotkeyPlayPause),
+            _HotkeyLine(s.hotkeySeek),
+            _HotkeyLine(s.hotkeyVolume),
+            _HotkeyLine(s.hotkeyMute),
+          ],
         ],
       ),
     );

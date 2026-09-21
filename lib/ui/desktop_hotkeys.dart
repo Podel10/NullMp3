@@ -1,10 +1,10 @@
-import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:provider/provider.dart';
 
 import '../state/player.dart';
 import '../state/settings.dart';
+import 'platform_features.dart';
 
 /// Windows media shortcuts: Space, arrows, M, and hardware media keys.
 class DesktopHotkeys extends StatefulWidget {
@@ -12,8 +12,7 @@ class DesktopHotkeys extends StatefulWidget {
 
   final Widget child;
 
-  static bool get enabled =>
-      !kIsWeb && defaultTargetPlatform == TargetPlatform.windows;
+  static bool get enabled => desktopHotkeysEnabled;
 
   @override
   State<DesktopHotkeys> createState() => _DesktopHotkeysState();

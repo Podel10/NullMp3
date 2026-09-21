@@ -1,6 +1,5 @@
 import 'dart:async';
 
-import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 
@@ -19,6 +18,7 @@ import 'details.dart';
 import 'equalizer.dart';
 import 'library_folders.dart';
 import 'now_playing.dart';
+import 'platform_features.dart';
 import 'recommended.dart';
 import 'search.dart';
 import 'settings.dart';
@@ -273,7 +273,7 @@ class _AppDrawer extends StatelessWidget {
                 ],
               ),
             ),
-            if (!kIsWeb && defaultTargetPlatform == TargetPlatform.windows)
+            if (pcParityEnabled)
               ListTile(
                 leading: const Icon(Icons.zoom_in_rounded),
                 title: Text(s.zoomSettings),
@@ -293,7 +293,7 @@ class _AppDrawer extends StatelessWidget {
                 Navigator.push(context, MaterialPageRoute<void>(builder: (_) => const ThemeSettingsScreen()));
               },
             ),
-            if (!kIsWeb && defaultTargetPlatform == TargetPlatform.windows)
+            if (pcParityEnabled)
               ListTile(
                 leading: const Icon(Icons.inventory_2_outlined),
                 title: Text(s.customization),

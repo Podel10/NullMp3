@@ -31,7 +31,7 @@ const catalogEn = <String, String>{
   'customization': 'Customization',
   'interactiveCover': 'Interactive cover',
   'interactiveCoverHint':
-      'Hold on the now-playing cover and move up or down to change volume.',
+      'Hold the now-playing cover and drag to change volume.',
   'interactiveCoverHorizontal': 'Left to right',
   'interactiveCoverHorizontalHint': 'Volume bar across the cover',
   'interactiveCoverVertical': 'Vertical panel',
