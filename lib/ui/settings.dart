@@ -43,7 +43,11 @@ class SettingsScreen extends StatelessWidget {
             divisions: 12,
             value: settings.minDurationSec.toDouble(),
             labelOf: (value) => value.round() == 0 ? s.off : '${value.round()}s',
-            onChanged: (value) => settings.setMinDuration(value.round()),
+            onChanged: (value) {
+              final seconds = value.round();
+              settings.setMinDuration(seconds);
+              library.setMinDurationSec(seconds);
+            },
           ),
           ListTile(
             title: Text(s.librarySizeLabel),

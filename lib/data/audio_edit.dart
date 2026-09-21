@@ -82,6 +82,129 @@ Future<int> probeAudioDurationMs(String path) async {
   return wave.durationMs;
 }
 
+/// True when [path] looks like a fragmented MP4/CMAF dump (HLS concat).
+bool fileLooksFragmentedMp4(String path) {
+  try {
+    final file = File(path);
+    if (!file.existsSync() || file.lengthSync() < 64) return false;
+    final raf = file.openSync();
+    try {
+      final length = raf.lengthSync().clamp(0, 2 * 1024 * 1024);
+      final buf = raf.readSync(length);
+      if (_bufHasDrmMarkers(buf)) return false;
+      var hasFtyp = false;
+      var hasMoof = false;
+      for (var i = 0; i + 8 <= buf.length; i++) {
+        if (buf[i + 4] == 0x66 && buf[i + 5] == 0x74 && buf[i + 6] == 0x79 && buf[i + 7] == 0x70) {
+          hasFtyp = true;
+        }
+        if (buf[i + 4] == 0x6D && buf[i + 5] == 0x6F && buf[i + 6] == 0x6F && buf[i + 7] == 0x66) {
+          hasMoof = true;
+        }
+        if (hasFtyp && hasMoof) return true;
+      }
+    } finally {
+      raf.closeSync();
+    }
+  } catch (_) {}
+  return false;
+}
+
+bool fileLooksDrmProtected(String path) {
+  try {
+    final file = File(path);
+    if (!file.existsSync() || file.lengthSync() < 64) return false;
+    final raf = file.openSync();
+    try {
+      final n = file.lengthSync().clamp(0, 512 * 1024);
+      return _bufHasDrmMarkers(raf.readSync(n));
+    } finally {
+      raf.closeSync();
+    }
+  } catch (_) {
+    return false;
+  }
+}
+
+bool _bufHasDrmMarkers(List<int> buf) {
+  const markers = [
+    [0x65, 0x6e, 0x63, 0x61], // enca
+    [0x74, 0x65, 0x6e, 0x63], // tenc
+    [0x70, 0x73, 0x73, 0x68], // pssh
+    [0x73, 0x63, 0x68, 0x6d], // schm
+  ];
+  for (final marker in markers) {
+    for (var i = 0; i <= buf.length - 4; i++) {
+      if (buf[i] == marker[0] &&
+          buf[i + 1] == marker[1] &&
+          buf[i + 2] == marker[2] &&
+          buf[i + 3] == marker[3]) {
+        return true;
+      }
+    }
+  }
+  return false;
+}
+
+/// Remux fragmented M4A/MP4 into a progressive file ExoPlayer can play.
+/// Android-only (MediaMuxer). Returns the playable path (may equal [path]).
+Future<String> remuxAudioIfNeeded(String path, {String? cacheDir}) async {
+  if (kIsWeb || !Platform.isAndroid) return path;
+  if (!fileLooksFragmentedMp4(path)) return path;
+  try {
+    Directory dir;
+    if (cacheDir != null && cacheDir.isNotEmpty) {
+      dir = Directory(cacheDir);
+    } else {
+      final support = await getApplicationSupportDirectory();
+      dir = Directory(p.join(support.path, 'remux'));
+    }
+    if (!await dir.exists()) await dir.create(recursive: true);
+    final dest = p.join(
+      dir.path,
+      '${path.hashCode.toUnsigned(32).toRadixString(16)}_${File(path).lengthSync()}.m4a',
+    );
+    if (File(dest).existsSync() && File(dest).lengthSync() > 256) return dest;
+    final saved = await _filesChannel.invokeMethod<String>('remuxAudio', {
+      'path': path,
+      'destPath': dest,
+    }).timeout(const Duration(seconds: 45));
+    if (saved != null && saved.isNotEmpty && File(saved).existsSync()) return saved;
+  } catch (_) {}
+  return path;
+}
+
+/// After a SoundCloud/HLS save: remux in place on Android when needed.
+Future<String> finalizeDownloadedAudio(String path) async {
+  if (kIsWeb || !Platform.isAndroid) return path;
+  if (!fileLooksFragmentedMp4(path)) return path;
+  final dir = File(path).parent.path;
+  final tmp = p.join(dir, '${p.basenameWithoutExtension(path)}.nullmp3remux.m4a');
+  try {
+    final saved = await _filesChannel.invokeMethod<String>('remuxAudio', {
+      'path': path,
+      'destPath': tmp,
+    }).timeout(const Duration(seconds: 60));
+    if (saved == null || saved.isEmpty || !File(saved).existsSync()) return path;
+    final finalPath = p.setExtension(path, '.m4a');
+    try {
+      await File(path).delete();
+    } catch (_) {}
+    if (File(finalPath).existsSync() && finalPath != saved) {
+      try {
+        await File(finalPath).delete();
+      } catch (_) {}
+    }
+    await File(saved).rename(finalPath);
+    return finalPath;
+  } catch (_) {
+    try {
+      if (File(tmp).existsSync()) await File(tmp).delete();
+    } catch (_) {}
+    return path;
+  }
+}
+
 Future<String> materializeAudioFile(String path) async {
   if (kIsWeb || !Platform.isAndroid) return path;
   final saved = await _filesChannel.invokeMethod<String>('materializeAudio', {

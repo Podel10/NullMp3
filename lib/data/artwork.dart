@@ -7,6 +7,7 @@ import 'package:path/path.dart' as p;
 import 'package:path_provider/path_provider.dart';
 
 import 'cover_image.dart';
+import 'scanner.dart';
 import 'tag_write.dart';
 
 const _artworkExts = ['gif', 'webp', 'mp4', 'webm', 'bin'];
@@ -58,7 +59,7 @@ class ArtworkStore extends ChangeNotifier {
     }
   }
 
-  String _key(String trackPath) => trackPath.hashCode.toRadixString(16);
+  String _key(String trackPath) => canonicalTrackPath(trackPath).hashCode.toRadixString(16);
 
   File _file(String key, String ext) => File(p.join(_cacheDir?.path ?? '', '$key.$ext'));
 

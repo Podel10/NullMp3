@@ -146,6 +146,28 @@ class MainActivity : FlutterActivity() {
                             }
                         }
                     }
+                    "remuxAudio" -> {
+                        val path = call.argument<String>("path")
+                        val destPath = call.argument<String>("destPath")
+                        if (path.isNullOrEmpty() || destPath.isNullOrEmpty()) {
+                            result.error("bad_path", "Missing path", null)
+                        } else {
+                            editorExecutor.execute {
+                                try {
+                                    val saved = AudioEditor.remuxProgressive(path, destPath)
+                                    mainHandler.post {
+                                        if (saved == null) {
+                                            result.error("remux", "remux failed", null)
+                                        } else {
+                                            result.success(saved)
+                                        }
+                                    }
+                                } catch (error: Exception) {
+                                    mainHandler.post { result.error("remux", error.message, null) }
+                                }
+                            }
+                        }
+                    }
                     "materializeAudio" -> {
                         val path = call.argument<String>("path")
                         if (path.isNullOrEmpty()) {

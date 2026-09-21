@@ -6,6 +6,7 @@ import 'package:path/path.dart' as p;
 import 'package:provider/provider.dart';
 
 import '../data/artwork.dart';
+import '../data/audio_edit.dart';
 import '../data/network.dart';
 import '../data/web_audio.dart';
 import '../l10n/strings.dart';
@@ -119,6 +120,7 @@ class _WebAudioScreenState extends State<WebAudioScreen> {
           'offline' => s.downloadAudioOffline,
           'cancelled' => s.downloadAudioCancelled,
           'badUrl' => s.downloadAudioBadLink,
+          'protected' => s.downloadAudioProtected,
           _ => s.downloadAudioFailed,
         };
       });
@@ -165,11 +167,32 @@ class _WebAudioScreenState extends State<WebAudioScreen> {
         },
       );
       if (!mounted) return;
-      final dir = files.isEmpty ? null : p.dirname(files.first.path);
-      if (dir != null) await settings.addFolderPath(dir);
-      await settings.rememberFiles([for (final file in files) file.path]);
-      await library.addFiles([for (final file in files) file.path]);
+      final finalized = <WebAudioFile>[];
       for (final file in files) {
+        final path = await finalizeDownloadedAudio(file.path);
+        finalized.add(
+          path == file.path
+              ? file
+              : WebAudioFile(
+                  path: path,
+                  title: file.title,
+                  artist: file.artist,
+                  cover: file.cover,
+                  durationMs: file.durationMs,
+                ),
+        );
+      }
+      final dir = finalized.isEmpty ? null : p.dirname(finalized.first.path);
+      if (dir != null) await settings.addFolderPath(dir);
+      await settings.rememberFiles([for (final file in finalized) file.path]);
+      await library.addFiles(
+        [for (final file in finalized) file.path],
+        durationHints: {
+          for (final file in finalized)
+            if (file.durationMs > 0) file.path: file.durationMs,
+        },
+      );
+      for (final file in finalized) {
         if (file.cover != null) {
           await ArtworkStore.instance.put(file.path, file.cover!);
         }
@@ -179,11 +202,11 @@ class _WebAudioScreenState extends State<WebAudioScreen> {
         _busy = false;
         _done
           ..clear()
-          ..addAll(files);
+          ..addAll(finalized);
         _progress = null;
       });
       ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text(s.downloadAudioSaved(files.length))),
+        SnackBar(content: Text(s.downloadAudioSaved(finalized.length))),
       );
     } on WebAudioException catch (error) {
       if (!mounted) return;
@@ -194,6 +217,7 @@ class _WebAudioScreenState extends State<WebAudioScreen> {
           'offline' => s.downloadAudioOffline,
           'badUrl' => s.downloadAudioBadLink,
           'cancelled' => s.downloadAudioCancelled,
+          'protected' => s.downloadAudioProtected,
           _ => s.downloadAudioFailed,
         };
       });
@@ -355,7 +379,7 @@ class _WebAudioScreenState extends State<WebAudioScreen> {
                     artist: file.artist,
                     album: '',
                     genre: '',
-                    durationMs: 0,
+                    durationMs: file.durationMs,
                     modifiedMs: 0,
                   ),
                   size: 48,

@@ -75,6 +75,7 @@ class SettingsController extends ChangeNotifier {
   static const _kUiScale = 'uiScale';
   static const _kInteractiveCover = 'interactiveCover';
   static const _kInteractiveCoverMode = 'interactiveCoverMode';
+  static const _kShowLyricsOnCover = 'showLyricsOnCover';
 
   static const double minUiScale = 0.75;
   static const double maxUiScale = 1.75;
@@ -112,6 +113,8 @@ class SettingsController extends ChangeNotifier {
   /// Windows: drag on now-playing cover to change volume.
   bool interactiveCover = false;
   InteractiveCoverMode interactiveCoverMode = InteractiveCoverMode.horizontal;
+  /// Windows: lyrics toggle on now-playing cover (karaoke-style).
+  bool showLyricsOnCover = false;
   bool offlineMode = false;
   AppLanguage language = AppLanguage.english;
 
@@ -189,6 +192,7 @@ class SettingsController extends ChangeNotifier {
     interactiveCover = _prefs.getBool(_kInteractiveCover) ?? false;
     interactiveCoverMode =
         InteractiveCoverMode.fromName(_prefs.getString(_kInteractiveCoverMode));
+    showLyricsOnCover = _prefs.getBool(_kShowLyricsOnCover) ?? false;
     offlineMode = _prefs.getBool(_kOffline) ?? false;
     _askedAllFiles = _prefs.getBool(_kAskedAllFiles) ?? false;
     NetworkGate.offline = offlineMode;
@@ -404,6 +408,12 @@ class SettingsController extends ChangeNotifier {
     notifyListeners();
   }
 
+  Future<void> setShowLyricsOnCover(bool value) async {
+    showLyricsOnCover = value;
+    await _prefs.setBool(_kShowLyricsOnCover, value);
+    notifyListeners();
+  }
+
   Future<void> setOfflineMode(bool value) async {
     offlineMode = value;
     NetworkGate.offline = value;
@@ -511,13 +521,27 @@ class SettingsController extends ChangeNotifier {
   }
 
   Future<void> rememberFiles(List<String> paths) async {
-    extraFiles = {...extraFiles, ...paths}.toList();
+    final next = <String>[...extraFiles];
+    final keys = {for (final f in next) canonicalTrackPath(f)};
+    for (final raw in paths) {
+      final path = resolveTrackPath(raw);
+      // Already covered by a scanned library folder — don't keep a second entry.
+      if (libraryFolders.any((folder) => pathIsUnderRoots(path, [folder]))) continue;
+      final key = canonicalTrackPath(path);
+      if (!keys.add(key)) continue;
+      next.add(path);
+    }
+    if (next.length == extraFiles.length && next.every(extraFiles.contains)) return;
+    extraFiles = next;
     await _prefs.setString(_kExtraFiles, jsonEncode(extraFiles));
     notifyListeners();
   }
 
   Future<void> forgetFile(String path) async {
-    extraFiles = extraFiles.where((f) => f != path).toList();
+    extraFiles = [
+      for (final f in extraFiles)
+        if (!sameTrackPath(f, path)) f,
+    ];
     await _prefs.setString(_kExtraFiles, jsonEncode(extraFiles));
     notifyListeners();
   }

@@ -111,6 +111,10 @@ class S {
   String get interactiveCoverHorizontalHint => _('interactiveCoverHorizontalHint');
   String get interactiveCoverVertical => _('interactiveCoverVertical');
   String get interactiveCoverVerticalHint => _('interactiveCoverVerticalHint');
+  String get showLyricsOnCover => _('showLyricsOnCover');
+  String get showLyricsOnCoverHint => _('showLyricsOnCoverHint');
+  String get lyricsOnCover => _('lyricsOnCover');
+  String get noLyricsOnCover => _('noLyricsOnCover');
   String get hotkeys => _('hotkeys');
   String get hotkeyPlayPause => _('hotkeyPlayPause');
   String get hotkeySeek => _('hotkeySeek');
@@ -250,6 +254,7 @@ class S {
   String get downloadAudioOffline => _('downloadAudioOffline');
   String get downloadAudioBadLink => _('downloadAudioBadLink');
   String get downloadAudioFailed => _('downloadAudioFailed');
+  String get downloadAudioProtected => _('downloadAudioProtected');
   String get downloadAudioCancelled => _('downloadAudioCancelled');
   String downloadAudioSaved(int n) => _('downloadAudioSaved', {'n': '$n'});
   String downloadAudioItem(int index, int total, String title) => _(

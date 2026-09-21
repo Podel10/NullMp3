@@ -12,6 +12,7 @@ import 'package:permission_handler/permission_handler.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 import '../data/artwork.dart';
+import '../data/audio_edit.dart';
 import '../data/cover_image.dart';
 import '../data/playback_file.dart';
 import '../models/models.dart';
@@ -904,6 +905,9 @@ class PlayerController extends ChangeNotifier with WidgetsBindingObserver {
           }
         }
       }
+      try {
+        playPath = await remuxAudioIfNeeded(playPath, cacheDir: cache).timeout(const Duration(seconds: 50));
+      } catch (_) {}
       Future<Duration?> setSource(String path) {
         return player.setAudioSource(
           path.startsWith('content:')
@@ -927,6 +931,18 @@ class PlayerController extends ChangeNotifier with WidgetsBindingObserver {
             } catch (_) {}
           }
           if (ms > 200) return true;
+          // Fragmented clear HLS dumps often load without reporting duration;
+          // library duration (e.g. SoundCloud API) is enough only for non-DRM files.
+          final known = track.durationMs;
+          final state = player.processingState;
+          if (known > 200 &&
+              !fileLooksDrmProtected(path) &&
+              (state == ProcessingState.ready ||
+                  state == ProcessingState.buffering ||
+                  state == ProcessingState.completed ||
+                  player.playing)) {
+            return true;
+          }
           return false;
         } catch (error) {
           debugPrint('setAudioSource failed for $path: $error');

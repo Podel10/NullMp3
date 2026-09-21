@@ -37,12 +37,14 @@ class WebAudioFile {
     required this.title,
     required this.artist,
     this.cover,
+    this.durationMs = 0,
   });
 
   final String path;
   final String title;
   final String artist;
   final Uint8List? cover;
+  final int durationMs;
 }
 
 class WebAudioSearchHit {
@@ -316,6 +318,9 @@ class _WebAudioJob {
     _throwIfStop();
     final title = (track['title'] as String?)?.trim();
     if (title == null || title.isEmpty) throw const WebAudioException('failed');
+    final durationMs = (track['full_duration'] as num?)?.toInt() ??
+        (track['duration'] as num?)?.toInt() ??
+        0;
     final user = track['user'];
     final artist = user is Map
         ? ((user['username'] as String?)?.trim().isNotEmpty == true
@@ -328,7 +333,10 @@ class _WebAudioJob {
     final media = track['media'];
     final transcodings = media is Map ? media['transcodings'] : track['transcodings'];
     final candidates = _soundCloudTranscodingCandidates(transcodings);
-    if (candidates.isEmpty) throw const WebAudioException('failed');
+    if (candidates.isEmpty) {
+      final encryptedOnly = _soundCloudHasEncryptedOnly(transcodings);
+      throw WebAudioException(encryptedOnly ? 'protected' : 'failed');
+    }
 
     File? dest;
     for (final picked in candidates) {
@@ -356,12 +364,28 @@ class _WebAudioJob {
           );
         }
         final path = await _renameByMagic(dest);
+        if (!await _fileLooksPlayable(File(path))) {
+          final drm = await _fileLooksDrmProtected(File(path));
+          try {
+            await File(path).delete();
+          } catch (_) {}
+          throw WebAudioException(drm ? 'protected' : 'failed');
+        }
         final cover = await _coverBytes(_soundArtwork(track['artwork_url'] as String?));
         onProgress?.call(WebAudioProgress(title: title, index: index, total: total, stage: 'tag'));
-        await _tagFile(path, title: title, artist: artist, album: album, cover: cover);
-        return WebAudioFile(path: path, title: title, artist: artist, cover: cover);
+        // Tag rewrite is safe for MP3; it can break fragmented HLS M4A/AAC containers.
+        if (p.extension(path).toLowerCase() == '.mp3') {
+          await _tagFile(path, title: title, artist: artist, album: album, cover: cover);
+        }
+        return WebAudioFile(
+          path: path,
+          title: title,
+          artist: artist,
+          cover: cover,
+          durationMs: durationMs,
+        );
       } on WebAudioException catch (error) {
-        if (error.code == 'cancelled') rethrow;
+        if (error.code == 'cancelled' || error.code == 'protected') rethrow;
         try {
           if (dest != null && await dest.exists()) await dest.delete();
         } catch (_) {}
@@ -373,7 +397,9 @@ class _WebAudioJob {
         dest = null;
       }
     }
-    throw const WebAudioException('failed');
+    throw WebAudioException(
+      _soundCloudHasEncryptedOnly(transcodings) ? 'protected' : 'failed',
+    );
   }
 
   Future<Map<String, dynamic>> _resolveSoundCloud(String url) async {
@@ -462,8 +488,7 @@ class _WebAudioJob {
     return out;
   }
 
-  /// Prefer progressive MP3, then HLS MP3, then any progressive / HLS.
-  /// Stream endpoints work whether or not the artist enabled official Download.
+  /// Prefer clear progressive/HLS MP3. Skip DRM streams (cbc/ctr-encrypted-hls).
   List<Map<String, dynamic>> _soundCloudTranscodingCandidates(Object? raw) {
     if (raw is! List) return const [];
     Map<String, dynamic>? progressiveMp3;
@@ -477,6 +502,10 @@ class _WebAudioJob {
       final format = row['format'];
       if (format is! Map) continue;
       final protocol = '${format['protocol'] ?? ''}'.toLowerCase();
+      // SoundCloud Go+/DRM: SAMPLE-AES / Widevine — not downloadable as a file.
+      if (protocol.contains('encrypt') || protocol.contains('cbc') || protocol.contains('ctr')) {
+        continue;
+      }
       final mime = '${format['mime_type'] ?? ''}'.toLowerCase();
       final mp3 = mime.contains('mpeg') || mime.contains('mp3');
       final hq = '${row['quality'] ?? ''}' == 'hq';
@@ -526,12 +555,33 @@ class _WebAudioJob {
     return _AudioSource(url: Uri.parse(url), ext: ext, hls: protocol.contains('hls'));
   }
 
+  bool _soundCloudHasEncryptedOnly(Object? raw) {
+    if (raw is! List || raw.isEmpty) return false;
+    var any = false;
+    var clear = false;
+    for (final item in raw) {
+      if (item is! Map) continue;
+      final format = item['format'];
+      if (format is! Map) continue;
+      final protocol = '${format['protocol'] ?? ''}'.toLowerCase();
+      any = true;
+      if (!protocol.contains('encrypt') && !protocol.contains('cbc') && !protocol.contains('ctr')) {
+        clear = true;
+      }
+    }
+    return any && !clear;
+  }
+
   Future<void> _downloadHls(Uri playlist, File dest) async {
     const referer = 'https://soundcloud.com/';
     var current = playlist;
     var body = await _getString(current, referer: referer);
     if (body == null || body.isEmpty) throw const WebAudioException('failed');
     var playlistBody = body;
+    if (playlistBody.contains('#EXT-X-KEY')) {
+      // Encrypted HLS (SAMPLE-AES / Widevine) — cannot produce a playable file.
+      throw const WebAudioException('protected');
+    }
     if (playlistBody.contains('#EXT-X-STREAM-INF')) {
       for (final line in playlistBody.split(RegExp(r'\r?\n'))) {
         final trimmed = line.trim();
@@ -543,13 +593,7 @@ class _WebAudioJob {
         break;
       }
     }
-    final lines = playlistBody.split(RegExp(r'\r?\n'));
-    final parts = <Uri>[];
-    for (final line in lines) {
-      final trimmed = line.trim();
-      if (trimmed.isEmpty || trimmed.startsWith('#')) continue;
-      parts.add(current.resolve(trimmed));
-    }
+    final parts = _parseHlsMediaParts(playlistBody, current);
     if (parts.isEmpty) throw const WebAudioException('failed');
     final tmp = File('${dest.path}.part');
     if (await tmp.exists()) await tmp.delete();
@@ -558,7 +602,12 @@ class _WebAudioJob {
     try {
       for (var i = 0; i < parts.length; i++) {
         _throwIfStop();
-        final bytes = await _getBytes(parts[i], referer: referer);
+        final part = parts[i];
+        final bytes = await _getBytes(
+          part.uri,
+          referer: referer,
+          hlsByteRange: part.byteRange,
+        );
         if (bytes == null || bytes.isEmpty) continue;
         got += bytes.length;
         if (got > _kMaxBytes) throw const WebAudioException('failed');
@@ -577,6 +626,12 @@ class _WebAudioJob {
       if (got <= 0) throw const WebAudioException('failed');
       if (await dest.exists()) await dest.delete();
       await tmp.rename(dest.path);
+      if (!await _fileLooksPlayable(dest)) {
+        try {
+          await dest.delete();
+        } catch (_) {}
+        throw const WebAudioException('failed');
+      }
     } catch (error) {
       try {
         await sink.close();
@@ -648,7 +703,11 @@ class _WebAudioJob {
     return utf8.decode(bytes, allowMalformed: true);
   }
 
-  Future<Uint8List?> _getBytes(Uri uri, {String? referer}) async {
+  Future<Uint8List?> _getBytes(
+    Uri uri, {
+    String? referer,
+    String? hlsByteRange,
+  }) async {
     NetworkGate.requireOnline();
     _throwIfStop();
     final request = await _client.getUrl(uri).timeout(const Duration(seconds: 20));
@@ -657,7 +716,12 @@ class _WebAudioJob {
     request.headers.set(HttpHeaders.acceptHeader, '*/*');
     request.headers.set('Origin', 'https://soundcloud.com');
     if (referer != null) request.headers.set(HttpHeaders.refererHeader, referer);
+    final rangeHeader = _httpRangeFromHls(hlsByteRange);
+    if (rangeHeader != null) {
+      request.headers.set(HttpHeaders.rangeHeader, rangeHeader);
+    }
     final response = await request.close().timeout(const Duration(seconds: 20));
+    // 206 = partial content for HLS BYTERANGE init/media slices.
     if (response.statusCode < 200 || response.statusCode >= 300) {
       await response.drain<void>();
       return null;
@@ -713,6 +777,104 @@ class _AudioSource {
   final Uri? url;
   final String ext;
   final bool hls;
+}
+
+class _HlsPart {
+  const _HlsPart(this.uri, [this.byteRange]);
+
+  final Uri uri;
+  final String? byteRange;
+}
+
+List<_HlsPart> _parseHlsMediaParts(String body, Uri base) {
+  final parts = <_HlsPart>[];
+  String? pendingRange;
+  for (final line in body.split(RegExp(r'\r?\n'))) {
+    final trimmed = line.trim();
+    if (trimmed.startsWith('#EXT-X-BYTERANGE:')) {
+      pendingRange = trimmed.substring('#EXT-X-BYTERANGE:'.length).trim();
+      continue;
+    }
+    if (trimmed.startsWith('#EXT-X-MAP:')) {
+      final uri = _hlsAttr(trimmed, 'URI');
+      if (uri == null || uri.isEmpty) continue;
+      parts.add(_HlsPart(base.resolve(uri), _hlsAttr(trimmed, 'BYTERANGE')));
+      continue;
+    }
+    if (trimmed.isEmpty || trimmed.startsWith('#')) continue;
+    parts.add(_HlsPart(base.resolve(trimmed), pendingRange));
+    pendingRange = null;
+  }
+  return parts;
+}
+
+String? _hlsAttr(String line, String key) {
+  final match = RegExp(
+    '$key="([^"]*)"|$key=\'([^\']*)\'|$key=([^,\\s]+)',
+    caseSensitive: false,
+  ).firstMatch(line);
+  return match?.group(1) ?? match?.group(2) ?? match?.group(3);
+}
+
+String? _httpRangeFromHls(String? raw) {
+  if (raw == null || raw.isEmpty) return null;
+  final bits = raw.split('@');
+  final length = int.tryParse(bits.first.trim());
+  if (length == null || length <= 0) return null;
+  final offset = bits.length > 1 ? (int.tryParse(bits[1].trim()) ?? 0) : 0;
+  return 'bytes=$offset-${offset + length - 1}';
+}
+
+Future<bool> _fileLooksPlayable(File file) async {
+  try {
+    if (await _fileLooksDrmProtected(file)) return false;
+    final raf = await file.open();
+    final head = await raf.read(32);
+    await raf.close();
+    if (head.length < 8) return false;
+    if (head[0] == 0x49 && head[1] == 0x44 && head[2] == 0x33) return true;
+    if (head[0] == 0xFF && (head[1] & 0xE0) == 0xE0) return true;
+    if (head[0] == 0x47) return true;
+    if (String.fromCharCodes(head.sublist(0, 4)) == 'OggS') return true;
+    final box = String.fromCharCodes(head.sublist(4, 8));
+    // Complete MP4/M4A starts with ftyp. Bare styp = media segment without init.
+    if (box == 'ftyp') return true;
+    return false;
+  } catch (_) {
+    return false;
+  }
+}
+
+/// SoundCloud DRM (SAMPLE-AES / Widevine) writes enca/tenc/pssh into the dump.
+Future<bool> _fileLooksDrmProtected(File file) async {
+  try {
+    final length = await file.length();
+    if (length < 64) return false;
+    final raf = await file.open();
+    // Scan init + early moof region (DRM signaling lives in moov/sinf).
+    final n = length < 512 * 1024 ? length : 512 * 1024;
+    final chunk = await raf.read(n);
+    await raf.close();
+    const markers = [
+      [0x65, 0x6e, 0x63, 0x61], // enca
+      [0x74, 0x65, 0x6e, 0x63], // tenc
+      [0x70, 0x73, 0x73, 0x68], // pssh
+      [0x73, 0x63, 0x68, 0x6d], // schm
+    ];
+    for (final marker in markers) {
+      for (var i = 0; i <= chunk.length - 4; i++) {
+        if (chunk[i] == marker[0] &&
+            chunk[i + 1] == marker[1] &&
+            chunk[i + 2] == marker[2] &&
+            chunk[i + 3] == marker[3]) {
+          return true;
+        }
+      }
+    }
+    return false;
+  } catch (_) {
+    return false;
+  }
 }
 
 String? _findSoundCloudClientId(String source) {

@@ -36,6 +36,11 @@ const catalogEn = <String, String>{
   'interactiveCoverHorizontalHint': 'Volume bar across the cover',
   'interactiveCoverVertical': 'Vertical panel',
   'interactiveCoverVerticalHint': 'Tall volume panel on the cover',
+  'showLyricsOnCover': 'Show lyrics on cover',
+  'showLyricsOnCoverHint':
+      'Adds a lyrics button on now playing. Tap it for karaoke-style text on the cover.',
+  'lyricsOnCover': 'Lyrics on cover',
+  'noLyricsOnCover': 'No lyrics for this track',
   'hotkeys': 'Keyboard shortcuts',
   'hotkeyPlayPause': 'Space — play / pause',
   'hotkeySeek': '← / → — previous / next track',
@@ -158,6 +163,8 @@ const catalogEn = <String, String>{
   'downloadAudioOffline': 'Turn off offline mode to download.',
   'downloadAudioBadLink': 'Need a SoundCloud link or a song name.',
   'downloadAudioFailed': 'Could not download',
+  'downloadAudioProtected':
+      'This SoundCloud track is DRM-protected and can’t be saved as a file.',
   'downloadAudioCancelled': 'Cancelled',
   'downloadAudioSaved': 'Saved {n} to Download',
   'downloadAudioItem': '{index} / {total}  {title}',

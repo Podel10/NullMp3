@@ -82,7 +82,7 @@ List<String> listAudioFiles(List<String> roots) {
       _collectAudioFiles(Directory(root), files);
     } catch (_) {}
   }
-  final sorted = files.toList()..sort();
+  final sorted = files.map(resolveTrackPath).toSet().toList()..sort();
   return sorted;
 }
 
@@ -103,7 +103,7 @@ void _collectAudioFiles(Directory dir, Set<String> files) {
 }
 
 bool isTelegramLibraryPath(String path, {String? relative}) {
-  final normalized = _canonicalPath(path);
+  final normalized = canonicalTrackPath(path);
   if (normalized.contains('/telegram/') || normalized.endsWith('/telegram')) return true;
   final rel = (relative ?? '').replaceAll('\\', '/').toLowerCase();
   return rel.contains('telegram');
@@ -111,16 +111,17 @@ bool isTelegramLibraryPath(String path, {String? relative}) {
 
 bool pathIsUnderRoots(String path, List<String> roots) {
   if (roots.isEmpty) return false;
-  final normalized = _canonicalPath(path);
+  final normalized = canonicalTrackPath(path);
   for (final root in roots) {
-    final prefix = _canonicalPath(root).replaceAll(RegExp(r'/+$'), '');
+    final prefix = canonicalTrackPath(root).replaceAll(RegExp(r'/+$'), '');
     if (normalized == prefix || normalized.startsWith('$prefix/')) return true;
   }
   return false;
 }
 
-String _canonicalPath(String path) {
-  var normalized = path.replaceAll('\\', '/').toLowerCase();
+/// Stable identity for a file path across `/` vs `\` and drive-letter case.
+String canonicalTrackPath(String path) {
+  var normalized = p.normalize(path).replaceAll('\\', '/').toLowerCase();
   const aliases = [
     '/storage/self/primary',
     '/storage/emulated/0',
@@ -135,6 +136,17 @@ String _canonicalPath(String path) {
     }
   }
   return normalized;
+}
+
+bool sameTrackPath(String a, String b) => canonicalTrackPath(a) == canonicalTrackPath(b);
+
+/// Prefer the OS-native absolute path so Downloads imports and folder scans match.
+String resolveTrackPath(String path) {
+  try {
+    return File(path).absolute.path;
+  } catch (_) {
+    return path;
+  }
 }
 
 List<Track> parseAudioFiles(List<String> paths) {

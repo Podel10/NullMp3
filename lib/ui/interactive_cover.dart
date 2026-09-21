@@ -4,7 +4,8 @@ import 'package:provider/provider.dart';
 import '../state/player.dart';
 import '../state/settings.dart';
 
-/// Hold and drag vertically on the cover to change volume.
+/// Hold and drag on the cover to change volume.
+/// Horizontal mode: drag left/right. Vertical mode: drag up/down.
 class InteractiveCover extends StatefulWidget {
   const InteractiveCover({
     super.key,
@@ -24,6 +25,7 @@ class InteractiveCover extends StatefulWidget {
 class _InteractiveCoverState extends State<InteractiveCover> {
   bool _active = false;
   double _volume = 1;
+  double _startX = 0;
   double _startY = 0;
   double _startVolume = 1;
 
@@ -38,12 +40,14 @@ class _InteractiveCoverState extends State<InteractiveCover> {
     if (!widget.enabled) return widget.child;
 
     final accent = Theme.of(context).colorScheme.primary;
+    final horizontal = widget.mode == InteractiveCoverMode.horizontal;
     return Listener(
       behavior: HitTestBehavior.opaque,
       onPointerDown: (event) {
         final settings = context.read<SettingsController>();
         setState(() {
           _active = true;
+          _startX = event.localPosition.dx;
           _startY = event.localPosition.dy;
           _startVolume = settings.volume;
           _volume = settings.volume;
@@ -52,10 +56,17 @@ class _InteractiveCoverState extends State<InteractiveCover> {
       onPointerMove: (event) {
         if (!_active) return;
         final box = context.findRenderObject() as RenderBox?;
-        final height = box?.size.height ?? 1;
-        // Drag up = louder.
-        final delta = (_startY - event.localPosition.dy) / height;
-        _setVolume(_startVolume + delta);
+        if (horizontal) {
+          final width = (box?.size.width ?? 1).clamp(1.0, double.infinity);
+          // Drag right = louder.
+          final delta = (event.localPosition.dx - _startX) / width;
+          _setVolume(_startVolume + delta);
+        } else {
+          final height = (box?.size.height ?? 1).clamp(1.0, double.infinity);
+          // Drag up = louder.
+          final delta = (_startY - event.localPosition.dy) / height;
+          _setVolume(_startVolume + delta);
+        }
       },
       onPointerUp: (_) => setState(() => _active = false),
       onPointerCancel: (_) => setState(() => _active = false),
@@ -65,7 +76,7 @@ class _InteractiveCoverState extends State<InteractiveCover> {
           widget.child,
           if (_active)
             IgnorePointer(
-              child: widget.mode == InteractiveCoverMode.horizontal
+              child: horizontal
                   ? _HorizontalVolumeBar(volume: _volume, color: accent)
                   : _VerticalVolumePanel(volume: _volume, color: accent),
             ),

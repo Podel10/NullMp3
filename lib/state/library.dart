@@ -8,6 +8,7 @@ import 'package:path/path.dart' as p;
 import 'package:path_provider/path_provider.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
+import '../data/audio_edit.dart';
 import '../data/file_actions.dart';
 import '../data/media_index.dart';
 import '../data/scanner.dart';
@@ -33,6 +34,8 @@ class LibraryController extends ChangeNotifier {
   bool scanning = false;
   String? scanMessage;
   SongSort sort = SongSort.title;
+  /// Minimum track length in seconds; 0 = off. Applied when listing / playing.
+  int minDurationSec = 0;
   bool _loaded = false;
   int _derivedRev = 0;
   int _songsRev = -1;
@@ -117,8 +120,22 @@ class LibraryController extends ChangeNotifier {
     return File(p.join(dir.path, 'library_cache_v3.json'));
   }
 
-  Iterable<Track> get visibleTracks =>
-      allTracks.where((track) => !hiddenPaths.contains(track.path));
+  void setMinDurationSec(int seconds) {
+    final next = seconds.clamp(0, 3600);
+    if (minDurationSec == next) return;
+    minDurationSec = next;
+    _invalidateDerived();
+    notifyListeners();
+  }
+
+  Iterable<Track> get visibleTracks => allTracks.where((track) {
+        if (hiddenPaths.contains(track.path)) return false;
+        final minMs = minDurationSec * 1000;
+        if (minMs <= 0) return true;
+        // Keep unknown duration until probed; then enforce the threshold.
+        if (track.durationMs <= 0) return true;
+        return track.durationMs >= minMs;
+      });
 
   List<Track> get hiddenTracks =>
       allTracks.where((track) => hiddenPaths.contains(track.path)).toList();
@@ -273,6 +290,10 @@ class LibraryController extends ChangeNotifier {
     required int minDurationSec,
     List<String> extraFiles = const [],
   }) async {
+    if (this.minDurationSec != minDurationSec) {
+      this.minDurationSec = minDurationSec;
+      _invalidateDerived();
+    }
     final hadCache = allTracks.isNotEmpty;
     scanning = true;
     scanMessage = hadCache ? 'updatingLibrary' : 'lookingForMusic';
@@ -297,30 +318,67 @@ class LibraryController extends ChangeNotifier {
       try {
         disk = diskRoots.isEmpty ? const <String>[] : await compute(listAudioFiles, diskRoots);
       } catch (_) {}
-      final unique = <String>{
-        for (final track in media) track.path,
-        ...disk,
-        ...extraFiles,
-      };
+      final uniqueByKey = <String, String>{};
+      void consider(String path) {
+        final resolved = resolveTrackPath(path);
+        final key = canonicalTrackPath(resolved);
+        final prev = uniqueByKey[key];
+        if (prev == null) {
+          uniqueByKey[key] = resolved;
+          return;
+        }
+        // Keep the spelling already known to the library (favorites / artwork keys).
+        final preferPrev = allTracks.any((t) => sameTrackPath(t.path, prev));
+        final preferNew = allTracks.any((t) => sameTrackPath(t.path, resolved));
+        if (!preferPrev && preferNew) uniqueByKey[key] = resolved;
+      }
 
-      final cached = {for (final track in allTracks) track.path: track};
-      final fromMedia = {for (final track in media) track.path: track};
+      for (final track in media) {
+        consider(track.path);
+      }
+      for (final path in disk) {
+        consider(path);
+      }
+      for (final path in extraFiles) {
+        consider(path);
+      }
+      final unique = uniqueByKey.values;
+
+      final cached = <String, Track>{};
+      for (final track in allTracks) {
+        cached[canonicalTrackPath(track.path)] = track;
+      }
+      final fromMedia = <String, Track>{};
+      for (final track in media) {
+        fromMedia[canonicalTrackPath(track.path)] = track;
+      }
       final merged = <Track>[];
       final toParse = <String>[];
 
       var checked = 0;
       for (final path in unique) {
-        final mediaTrack = fromMedia[path];
+        final key = canonicalTrackPath(path);
+        final mediaTrack = fromMedia[key];
         if (mediaTrack != null) {
-          final old = cached[path];
+          final old = cached[key];
           final hashed = titleNeedsTagRead(mediaTrack.title) ||
               titleNeedsTagRead(mediaTrack.fileName) ||
               (pathLooksLikeTelegram(path) && mediaTrack.title == mediaTrack.fileName);
           if (hashed && (old == null || titleNeedsTagRead(old.title))) {
             toParse.add(path);
-            merged.add(_keepUserTags(old ?? mediaTrack, old));
+            merged.add(_keepUserTags(old ?? mediaTrack.copyWith(path: path), old));
           } else {
-            final next = (old != null && (!titleNeedsTagRead(old.title) || old.tagsEdited)) ? old : mediaTrack;
+            var next = (old != null && (!titleNeedsTagRead(old.title) || old.tagsEdited))
+                ? old
+                : mediaTrack.copyWith(path: path);
+            if (next.durationMs <= 0 && old != null && old.durationMs > 0) {
+              next = next.copyWith(durationMs: old.durationMs);
+            }
+            // Fresh MediaStore rows for SoundCloud dumps often have DURATION=0 —
+            // parse the file (and keep any known duration) instead of locking in 0.
+            if (next.durationMs <= 0) {
+              toParse.add(path);
+            }
             merged.add(_keepUserTags(next, old));
           }
           continue;
@@ -329,9 +387,12 @@ class LibraryController extends ChangeNotifier {
         try {
           modifiedMs = File(path).lastModifiedSync().millisecondsSinceEpoch;
         } catch (_) {}
-        final old = cached[path];
-        if (old != null && old.modifiedMs != 0 && old.modifiedMs == modifiedMs) {
-          merged.add(old);
+        final old = cached[key];
+        if (old != null &&
+            old.modifiedMs != 0 &&
+            old.modifiedMs == modifiedMs &&
+            old.durationMs > 0) {
+          merged.add(old.path == path ? old : old.copyWith(path: path));
         } else {
           toParse.add(path);
           merged.add(old ?? trackFromPathFast(path, modifiedMs: modifiedMs));
@@ -342,11 +403,9 @@ class LibraryController extends ChangeNotifier {
         }
       }
 
-      final minMs = minDurationSec * 1000;
-      allTracks = [
-        for (final track in merged)
-          if (minMs == 0 || track.durationMs == 0 || track.durationMs >= minMs) track,
-      ];
+      // Keep every file in allTracks; min-duration is applied in [visibleTracks]
+      // after durations are known (and when the user moves the slider).
+      allTracks = merged;
       scanning = false;
       scanMessage = null;
       notifyListeners();
@@ -357,13 +416,16 @@ class LibraryController extends ChangeNotifier {
         for (var i = 0; i < toParse.length; i += chunk) {
           final slice = toParse.sublist(i, math.min(i + chunk, toParse.length));
           final parsed = await compute(parseAudioFiles, slice);
-          final byPath = {for (final track in parsed) track.path: track};
+          final byPath = <String, Track>{
+            for (final track in parsed) canonicalTrackPath(track.path): track,
+          };
           allTracks = [
             for (final track in allTracks)
-              _keepUserTags(byPath[track.path] ?? track, track),
+              _keepUserTags(byPath[canonicalTrackPath(track.path)] ?? track, track),
           ];
+          // Durations just filled in — refresh filtered song lists.
+          notifyListeners();
         }
-        notifyListeners();
       }
 
       _scheduleSaveCache();
@@ -375,22 +437,67 @@ class LibraryController extends ChangeNotifier {
   }
 
   Future<void> addLocalTrack(Track track) async {
-    if (allTracks.any((item) => item.path == track.path)) {
-      await replaceTrack(track);
+    final resolved = track.copyWith(path: resolveTrackPath(track.path));
+    final existing = allTracks.where((item) => sameTrackPath(item.path, resolved.path)).toList();
+    if (existing.isNotEmpty) {
+      await replaceTrack(resolved.copyWith(path: existing.first.path));
       return;
     }
-    allTracks = [...allTracks, track];
+    allTracks = [...allTracks, resolved];
     notifyListeners();
     _scheduleSaveCache();
   }
 
-  Future<void> addFiles(List<String> paths) async {
+  Future<void> addFiles(List<String> paths, {Map<String, int>? durationHints}) async {
     if (paths.isEmpty) return;
-    final existing = allTracks.map((t) => t.path).toSet();
-    final fresh = paths.where((p) => !existing.contains(p)).toList();
-    if (fresh.isEmpty) return;
+    final hints = <String, int>{
+      if (durationHints != null)
+        for (final entry in durationHints.entries) canonicalTrackPath(entry.key): entry.value,
+    };
+    final fresh = <String>[];
+    final seen = <String>{};
+    var touched = false;
+    for (final raw in paths) {
+      final path = resolveTrackPath(raw);
+      final key = canonicalTrackPath(path);
+      if (!seen.add(key)) continue;
+      final existingIndex = allTracks.indexWhere((t) => sameTrackPath(t.path, path));
+      if (existingIndex >= 0) {
+        final existing = allTracks[existingIndex];
+        final hint = hints[key] ?? 0;
+        if (existing.durationMs <= 0 && hint > 0) {
+          allTracks = [
+            for (var i = 0; i < allTracks.length; i++)
+              if (i == existingIndex) existing.copyWith(durationMs: hint) else allTracks[i],
+          ];
+          touched = true;
+        }
+        continue;
+      }
+      fresh.add(path);
+    }
+    if (fresh.isEmpty) {
+      if (touched) {
+        notifyListeners();
+        _scheduleSaveCache();
+      }
+      return;
+    }
     final parsed = await compute(parseAudioFiles, fresh);
-    allTracks = [...allTracks, ...parsed];
+    final fixed = <Track>[];
+    for (final track in parsed) {
+      var duration = track.durationMs;
+      if (duration <= 0) {
+        duration = hints[canonicalTrackPath(track.path)] ?? 0;
+      }
+      if (duration <= 0) {
+        try {
+          duration = await probeAudioDurationMs(track.path);
+        } catch (_) {}
+      }
+      fixed.add(duration > 0 && duration != track.durationMs ? track.copyWith(durationMs: duration) : track);
+    }
+    allTracks = [...allTracks, ...fixed];
     notifyListeners();
     _scheduleSaveCache();
   }
@@ -503,6 +610,7 @@ class LibraryController extends ChangeNotifier {
       coverShape: previous.coverShape,
       tagsEdited: true,
       uri: next.uri ?? previous.uri,
+      durationMs: next.durationMs > 0 ? next.durationMs : previous.durationMs,
     );
   }
 
@@ -515,6 +623,10 @@ class LibraryController extends ChangeNotifier {
     if (out.uri == null && previous.uri != null) {
       out = out.copyWith(uri: previous.uri);
     }
+    // MediaStore / tag readers often report 0 for freshly written SoundCloud dumps.
+    if (out.durationMs <= 0 && previous.durationMs > 0) {
+      out = out.copyWith(durationMs: previous.durationMs);
+    }
     return out;
   }
 
@@ -522,7 +634,7 @@ class LibraryController extends ChangeNotifier {
     final oldPath = fromPath ?? updated.path;
     allTracks = [
       for (final track in allTracks)
-        if (track.path == oldPath) updated else track,
+        if (sameTrackPath(track.path, oldPath)) updated else track,
     ];
     notifyListeners();
     await _saveCache();
@@ -582,18 +694,27 @@ class LibraryController extends ChangeNotifier {
   }
 
   Future<void> removeTrack(String path) async {
-    allTracks = allTracks.where((track) => track.path != path).toList();
-    hiddenPaths = {...hiddenPaths}..remove(path);
+    allTracks = allTracks.where((track) => !sameTrackPath(track.path, path)).toList();
+    hiddenPaths = {
+      for (final item in hiddenPaths)
+        if (!sameTrackPath(item, path)) item,
+    };
     _invalidateDerived();
-    favorites = {...favorites}..remove(path);
-    playCounts = {...playCounts}..remove(path);
-    recentlyPlayed = recentlyPlayed.where((item) => item != path).toList();
+    favorites = {
+      for (final item in favorites)
+        if (!sameTrackPath(item, path)) item,
+    };
+    playCounts = {
+      for (final entry in playCounts.entries)
+        if (!sameTrackPath(entry.key, path)) entry.key: entry.value,
+    };
+    recentlyPlayed = recentlyPlayed.where((item) => !sameTrackPath(item, path)).toList();
     playlists = [
       for (final playlist in playlists)
         Playlist(
           id: playlist.id,
           name: playlist.name,
-          trackPaths: playlist.trackPaths.where((item) => item != path).toList(),
+          trackPaths: playlist.trackPaths.where((item) => !sameTrackPath(item, path)).toList(),
         ),
     ];
     await _prefs.setStringList(_kFavorites, favorites.toList());

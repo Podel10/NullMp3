@@ -40,6 +40,18 @@ Output:
 
 `build/app/outputs/flutter-apk/app-release.apk`
 
+### Windows (do not send a raw Release zip alone)
+
+Raw `Release.zip` often fails on other PCs with **Bad Image 0xc0e90002** (missing Visual C++ / blocked audio DLL). Send an installer instead:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File tool\windows\build_installer.ps1
+```
+
+That produces `dist\windows\NullMP3-Setup.exe` — **one file** to send users.
+
+It installs Visual C++ if needed, installs Null MP3, and can launch the app. Covers and library stay in `%AppData%\Roaming\com.nullmp3\Null MP3\` and survive updates.
+
 ## Support the project
 
 - **BNB Smart Chain (BEP-20) / Ethereum (ERC-20):** `0x5Ac0E1472895F3457771558cC4EDeb712AB69F91`

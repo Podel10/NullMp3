@@ -60,6 +60,7 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
     try {
       await settings.load();
       await library.load();
+      library.setMinDurationSec(settings.minDurationSec);
       await ArtworkStore.instance.init();
       await PlaybackCache.init();
       await player.init();
@@ -205,6 +206,7 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
       ),
       bottomNavigationBar: MiniPlayer(
               onOpen: () => openNowPlaying(context),
+              onPrevious: () => context.read<PlayerController>().previous(),
               onPlayPause: () => context.read<PlayerController>().playPause(),
               onNext: () => context.read<PlayerController>().next(),
             ),
@@ -293,7 +295,7 @@ class _AppDrawer extends StatelessWidget {
             ),
             if (!kIsWeb && defaultTargetPlatform == TargetPlatform.windows)
               ListTile(
-                leading: const Icon(Icons.tune_rounded),
+                leading: const Icon(Icons.inventory_2_outlined),
                 title: Text(s.customization),
                 onTap: () {
                   Navigator.pop(context);

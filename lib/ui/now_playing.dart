@@ -13,6 +13,7 @@ import '../models/models.dart';
 import '../state/settings.dart';
 import '../theme/app_theme.dart';
 import 'beat_halo.dart';
+import 'cover_lyrics.dart';
 import 'interactive_cover.dart';
 import 'widgets.dart';
 
@@ -109,26 +110,18 @@ class NowPlayingScreen extends StatelessWidget {
                         child: SizedBox(
                           width: side,
                           height: side,
-                          child: InteractiveCover(
-                            enabled: !kIsWeb &&
+                          child: _NowPlayingCover(
+                            track: track,
+                            onAmbient: onAmbient,
+                            interactiveCover: !kIsWeb &&
                                 defaultTargetPlatform == TargetPlatform.windows &&
                                 settings.interactiveCover,
-                            mode: settings.interactiveCoverMode,
-                            child: BeatHaloCover(
-                              child: CoverArt(
-                                key: ValueKey('art-${track.path}-${track.coverShape.name}'),
-                                track: track,
-                                radius: 10,
-                                expand: true,
-                                muted: true,
-                                loadArtwork: true,
-                                animate: true,
-                                liveRim: settings.beatHalo &&
-                                    settings.beatHaloMode == BeatHaloMode.advanced,
-                                softEdge: settings.beatHalo && track.isCircleCover,
-                                heroTag: 'now-art',
-                              ),
-                            ),
+                            interactiveMode: settings.interactiveCoverMode,
+                            lyricsButton: !kIsWeb &&
+                                defaultTargetPlatform == TargetPlatform.windows &&
+                                settings.showLyricsOnCover,
+                            beatHalo: settings.beatHalo,
+                            beatHaloAdvanced: settings.beatHaloMode == BeatHaloMode.advanced,
                           ),
                         ),
                       );
@@ -243,6 +236,93 @@ Color _haloFromArtwork(Color? source, Color fallback) {
       .withSaturation((hsl.saturation * 1.08).clamp(0.0, 0.88).toDouble())
       .withLightness((hsl.lightness * 0.42 + 0.4).clamp(0.36, 0.74).toDouble())
       .toColor();
+}
+
+class _NowPlayingCover extends StatefulWidget {
+  const _NowPlayingCover({
+    required this.track,
+    required this.onAmbient,
+    required this.interactiveCover,
+    required this.interactiveMode,
+    required this.lyricsButton,
+    required this.beatHalo,
+    required this.beatHaloAdvanced,
+  });
+
+  final Track track;
+  final Color onAmbient;
+  final bool interactiveCover;
+  final InteractiveCoverMode interactiveMode;
+  final bool lyricsButton;
+  final bool beatHalo;
+  final bool beatHaloAdvanced;
+
+  @override
+  State<_NowPlayingCover> createState() => _NowPlayingCoverState();
+}
+
+class _NowPlayingCoverState extends State<_NowPlayingCover> {
+  bool _lyricsOpen = false;
+
+  @override
+  void didUpdateWidget(covariant _NowPlayingCover oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.track.path != widget.track.path) {
+      _lyricsOpen = false;
+    }
+    if (!widget.lyricsButton && _lyricsOpen) {
+      _lyricsOpen = false;
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final track = widget.track;
+    final art = BeatHaloCover(
+      child: CoverArt(
+        key: ValueKey('art-${track.path}-${track.coverShape.name}'),
+        track: track,
+        radius: 10,
+        expand: true,
+        muted: true,
+        loadArtwork: true,
+        animate: true,
+        liveRim: widget.beatHalo && widget.beatHaloAdvanced,
+        softEdge: widget.beatHalo && track.isCircleCover,
+        heroTag: 'now-art',
+      ),
+    );
+
+    return InteractiveCover(
+      // Volume drag while lyrics are open fights the karaoke layer.
+      enabled: widget.interactiveCover && !_lyricsOpen,
+      mode: widget.interactiveMode,
+      child: Stack(
+        fit: StackFit.expand,
+        children: [
+          art,
+          if (_lyricsOpen) CoverLyricsOverlay(track: track),
+          if (widget.lyricsButton)
+            Positioned(
+              right: 8,
+              bottom: 8,
+              child: Material(
+                color: Colors.black.withValues(alpha: 0.45),
+                shape: const CircleBorder(),
+                child: IconButton(
+                  tooltip: context.s.lyricsOnCover,
+                  onPressed: () => setState(() => _lyricsOpen = !_lyricsOpen),
+                  color: Colors.white,
+                  icon: Icon(
+                    _lyricsOpen ? Icons.lyrics_rounded : Icons.lyrics_outlined,
+                  ),
+                ),
+              ),
+            ),
+        ],
+      ),
+    );
+  }
 }
 
 class _ArtworkAtmosphere extends StatelessWidget {

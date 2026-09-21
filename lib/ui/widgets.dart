@@ -294,9 +294,16 @@ class EmptyLibrary extends StatelessWidget {
 }
 
 class MiniPlayer extends StatelessWidget {
-  const MiniPlayer({super.key, required this.onOpen, required this.onPlayPause, required this.onNext});
+  const MiniPlayer({
+    super.key,
+    required this.onOpen,
+    required this.onPrevious,
+    required this.onPlayPause,
+    required this.onNext,
+  });
 
   final VoidCallback onOpen;
+  final VoidCallback onPrevious;
   final VoidCallback onPlayPause;
   final VoidCallback onNext;
 
@@ -371,6 +378,11 @@ class MiniPlayer extends StatelessWidget {
                         ),
                       ),
                       IconButton(
+                        onPressed: onPrevious,
+                        tooltip: context.s.previousTrack,
+                        icon: const Icon(Icons.skip_previous_rounded, size: 28),
+                      ),
+                      IconButton(
                         onPressed: onPlayPause,
                         icon: Icon(
                           player.playing ? Icons.pause_rounded : Icons.play_arrow_rounded,
@@ -379,6 +391,7 @@ class MiniPlayer extends StatelessWidget {
                       ),
                       IconButton(
                         onPressed: onNext,
+                        tooltip: context.s.nextTrack,
                         icon: const Icon(Icons.skip_next_rounded, size: 28),
                       ),
                     ],
